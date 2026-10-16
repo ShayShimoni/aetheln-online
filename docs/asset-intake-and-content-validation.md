@@ -162,13 +162,30 @@ dependency, hard or soft, whose target is editor-only content: a `/Script`
 package flagged `PKG_EditorOnly` or `PKG_UncookedOnly` (Editor and
 UncookedOnly modules), a package whose on-disk Asset Registry record carries
 either flag, or a `/Script` package that is not loaded in the Editor and so
-cannot be proven runtime content. Editor-only (`NotGame`) references, such as
-a Blueprint's editor graph nodes, are recorded and allowed; a `/Game` target
-of one must still resolve to governed content. The Asset Registry does not
-record hard dependencies on `/Script/CoreUObject`, `/Script/Engine`,
-`/Script/BlueprintGraph`, or `/Script/UnrealEd`, so the scanner cannot observe
-those four. A guarded test snapshot carries no package flags and therefore
-reports no editor-only runtime dependencies.
+cannot be proven runtime content. One case is recorded in the
+`broken_references` evidence instead of failing: a `Game` dependency on a
+loaded `/Script` package flagged `PKG_UncookedOnly` and not `PKG_EditorOnly`,
+from a package whose every asset class is a `UBlueprint`. SavePackage treats
+only `PKG_EditorOnly` as editor-only, so every Control Rig Blueprint, such as
+`CR_Mannequin_FootIK`, saves its `/Script/ControlRigDeveloper` and
+`/Script/RigVMDeveloper` imports as `Game`, and the cook strips the
+`UBlueprint` itself (`UBlueprint::NeedsLoadForClient` and
+`NeedsLoadForServer` return false). This exception is inferred from engine
+code. Revisit trigger: the first #15 client and dedicated-server cook must
+show that cooked `CR_Mannequin_FootIK` imports neither package; otherwise the
+exception is removed. A `PKG_EditorOnly` target still fails from any package.
+Editor-only (`NotGame`) references, such as a Blueprint's editor graph nodes
+or a mesh's preview assets, are recorded and allowed. A `/Game` target of one
+that is not governed is recorded in the
+`broken_references` evidence, not failed: closed coverage already requires an
+intake record for every `/Game` package on disk, so such a target is missing
+editor or preview content that never cooks, such as the seven preview
+packages Issue #100 excluded (`docs/movement-poc.md:81-85`). A `/Game` target
+of a `Game` dependency must still resolve to governed content. The Asset
+Registry does not record hard dependencies on `/Script/CoreUObject`,
+`/Script/Engine`, `/Script/BlueprintGraph`, or `/Script/UnrealEd`, so the
+scanner cannot observe those four. A guarded test snapshot carries no package
+flags and therefore reports no editor-only runtime dependencies.
 
 `Shared` packages are required in both targets. `ServerOnly` packages are
 required in the dedicated-server cook and prohibited from the client cook.
@@ -269,7 +286,15 @@ tests and is identified as `test_snapshot` in the report.
 
 Under the separately authorized engine gate, run the live local scanner. Its
 wrapper first builds the exact `AethelnOnlineEditor Win64 Development` target
-and derives the exact versioned toolchain and module evidence from that build:
+with the CI editor build's compiler and Windows SDK pins
+(`-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`, the values in
+`scripts/ci/InitialPreparation.BuildInvocation.ps1`), so in CI it reuses that
+editor build instead of switching toolchains. Like that build, it passes
+`-NoEngineChanges` (issue #267), so UBT exits 5 instead of rewriting an
+existing engine file, and like that build it first deletes the target's
+`Makefile.bin`, so UBT creates it and UHT keeps its input cache on (TA-020
+2026-10-11 amendment). It then derives the exact
+versioned toolchain and module evidence from that build:
 
     New-Item -ItemType Directory -Path TestResults -Force
     powershell -NoProfile -File scripts/content/Invoke-ContentValidation.ps1 -EngineRoot <UE-5.8.1-source> -OutputPath TestResults/content-validation-report.json
@@ -280,14 +305,39 @@ build command and log, records the compiler/resource-compiler identities,
 validates the target receipt, module manifest, and exact loaded project-module
 set, then launches
 `-run=GameTests.AethelnContentValidation`, and rejects stale, mismatched, or
-malformed output. `-AssetRegistrySnapshotPath` is test-only and is rejected
+malformed output.
+
+The compiler and resource-compiler identities come from the toolchain line
+that UnrealBuildTool records in the target makefile,
+`Intermediate/Build/Win64/x64/AethelnOnlineEditor/Development/Makefile.bin`, not
+from the build log. UBT writes that line into the makefile's diagnostics
+whenever it creates the makefile, but prints it only when it executes build
+actions, so an up-to-date build, as in CI after the editor job, logs none. UBT
+recreates the makefile when its command-line arguments change or when the
+compiler, linker, or resource compiler is newer than the makefile, so the
+recorded line names the toolchain the build uses. The wrapper reads only the
+makefile's header and diagnostics (UE 5.8.1 makefile version 37) and requires
+exactly one `Using Visual Studio <version> toolchain (<root>) and Windows
+<version> SDK (<root>).` line. When the build log also prints that line, it must
+match. The wrapper then hashes the `cl.exe` and `rc.exe` that the line names. The
+report's `compiler_version` is therefore the version that UBT recorded for the
+compiler binary (for example `14.44.35228`), which can differ from the
+`-CompilerVersion` pin (`14.44.35207`, the toolchain directory name).
+
+`-AssetRegistrySnapshotPath` is test-only and is rejected
 unless `-AllowTestRegistrySnapshot` is also present; the guard is not authority
 to substitute a fixture for live editor evidence.
 
 The wrapper writes each run to unique pending files under the retained output
 directory. A failed build, commandlet, or report check leaves the previous
 published report and logs unchanged; pending files are diagnostics, not accepted
-evidence. After a valid run, byte-verified copies of the previous outputs are
+evidence. The commandlet's `-Report` argument names the published
+`content-validation-report.json` below `TestResults`, the only report name the
+commandlet accepts. The commandlet never opens that path: it writes the report
+through the inherited `-ReportHandle` of the pending file, after checking that
+the handle's file identity equals `-ReportFileIdentity`. The command tests' fake
+editor enforces the same path contract and pins it to the commandlet source.
+After a valid run, byte-verified copies of the previous outputs are
 retained under `.previous.*` names while the new logs and then the report are
 published by handle-relative renames. If publication fails partway, the wrapper
 restores the previous published bytes from those copies or reports the exact
@@ -301,7 +351,10 @@ The lock file may remain after a process exits, but the handle, not the file's
 presence or timestamp, determines ownership, so an abandoned file is not a
 stale-lock ambiguity. The Editor build starts suspended and is assigned to a
 kill-on-close Windows job before it resumes, so its batch launcher and native
-descendants share one cleanup boundary. Build stdout and stderr are streamed
+descendants share one cleanup boundary. The build runs with
+`MSBUILDDISABLENODEREUSE=1`: `Build.bat` runs `dotnet msbuild -t:Scan`, whose
+reusable worker nodes would otherwise stay in that job until MSBuild's
+15-minute idle timeout, and the wrapper waits for the job to empty. Build stdout and stderr are streamed
 into the retained pending log with a 16 MiB capture cap; overflow or the
 separate `-BuildTimeoutSeconds` limit (24 hours by default) terminates the
 owned job and waits for its processes and pipe to quiesce before returning.
@@ -447,6 +500,16 @@ and rerun; never edit evidence to suppress a finding. Under Issue #16
 coordination, all four portable content-validation suites are default required
 checks in `Invoke-CiSuite.ps1`. Clean packaging or cook execution remains
 separately authority-gated.
+
+On owner pull requests that select `content-reference-validation`, the
+`trusted-content-validation` CI job runs this launcher against the live Asset
+Registry in the managed compile workspace, and `content-receipt-shadow`
+publishes a non-authoritative shadow receipt
+([TA-025](architecture-decisions.md#ta-025---separate-engine-runner-job-for-content-reference-validation)).
+That receipt claims only report integrity and the six `reference_boundary`
+checks; the other families still run, and any deterministic error fails the
+report. A green content receipt is never content approval, and it is not cook
+evidence.
 
 The comparator hashes the accepted content-validation report, build provenance,
 both staged registries, both closed manifests, and every inventory page into

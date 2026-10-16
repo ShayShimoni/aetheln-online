@@ -41,8 +41,9 @@ documents, and it changes no product rule. Every tuning value stays `TBD`; a
 `Provisional...` config key is a named placeholder, never tuning. The Gameplay
 Tag and content-version conventions are in
 [Combat and Networking Architecture](combat-and-networking-architecture.md#gameplay-tag-and-content-version-conventions).
-C++ names are proposed code names. Gate Step, Sworn Rebuke, Hold the Line,
-Endurance, Guard, and Oathscar are working names, not final names.
+C++ names are proposed code names. Instant Strike, Parry, Attack Stance,
+Defense Stance, Endurance, Guard, and Oathscar are working names, not final
+names.
 
 **Citations.** Repository `path:line` citations are valid at `develop`
 revision `688b6b1`; citations into the combat document use section names,
@@ -59,7 +60,8 @@ UE 5.8.1 source, revision `71fe36aac5`
    AI uses its own ASC on the pawn, in Minimal mode.
 2. `APlayerState::OnPawnSet` drives the lifecycle. The GameCore pawn stays free
    of GAS.
-3. One attribute set holds Health, Endurance, Guard, and each maximum. All six
+3. One attribute set holds Health, Endurance, Guard, and each maximum. Health
+   and MaxHealth replicate to every client; Endurance, Guard, and their maxima
    replicate to the owner only. Gameplay Effects make every change.
 4. One activation authority has two selected entries: the ordinary versioned
    RPC and #18's server-internal movement-carried entry, called only while
@@ -70,10 +72,13 @@ UE 5.8.1 source, revision `71fe36aac5`
 5. The stock GAS activation routes are closed by two engine overrides and a
    choke point in the base ability. Every activation request draws from a
    per-connection rate bucket, and outcomes go to the owner only.
-6. P2 to P5 merge without prediction. Predicting Hold the Line (P6) waits for
-   an owner decision after the P5 feel test (candidate TC-008).
-7. CI runs a frozen two-test filter, so P2 to P5 record local automation
-   evidence. The spike classes are untouched.
+6. P2 to P5 merge without prediction. Predicting one self-only ability (P6)
+   waits for an owner decision after the P5 feel test (candidate TC-008). The
+   first candidate, Hold the Line, was dropped by the owner on 2026-10-13;
+   which representative active, if any, replaces it is open.
+7. CI ran a frozen two-test filter, so P2 to P5 record local automation
+   evidence. Since #237, CI runs every declared `Aetheln.` test. The spike
+   classes are untouched.
 
 The PlayerState network update frequency is raised to a provisional 100 Hz
 under the config name `ProvisionalNetUpdateFrequency`; Issue
@@ -93,15 +98,20 @@ old "unnamed prototype combat resource" wording in the roadmap, the prototype
 brief, the scope ledger, and the supporting artifacts; Issue #61's body still
 carries it, and #19 does not edit it.
 
-[Characters and Factions](characters-and-factions.md)
-(`docs/characters-and-factions.md:313-319`) defines exactly three
-representative actives, Gate Step, Sworn Rebuke, and Hold the Line, with their
-stable IDs and canon summaries and with all tuning `TBD` (`:324-328`). The
-combat document's conventions table maps their IDs to tags. #19 builds only
-their skeletons: identity, activation, validation, cost, cooldown, and state
-tags. Contacts, Guard pressure, interruption, movement, and attack windows
-belong to Issue [#60](https://github.com/ShayShimoni/aetheln-online/issues/60);
-dodge interplay belongs to Issue
+[Characters and Factions](characters-and-factions.md#sword-and-shield-prototype-candidate)
+defines exactly three representative actives: Instant Strike, Parry, and a
+Stance with two mutually exclusive casts (Attack Stance and Defense Stance),
+with their stable IDs and canon summaries and with all tuning `TBD` except the
+provisional 600 s stance duration. The owner replaced the earlier actives,
+Gate Step, Sworn Rebuke, and Hold the Line, on 2026-10-13
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)).
+#19 P4 built skeletons of the earlier three (identity, activation, validation,
+cost, cooldown, and state tags); Issue
+[#260](https://github.com/ShayShimoni/aetheln-online/issues/260) P2 removed them
+([Representative Oathscar Actives](#representative-oathscar-actives-260)).
+Contacts and attack windows belong to Issue
+[#60](https://github.com/ShayShimoni/aetheln-online/issues/60)'s timeline;
+the defense slot belongs to Issue
 [#18](https://github.com/ShayShimoni/aetheln-online/issues/18).
 
 Existing code, as of `develop` `688b6b1`:
@@ -120,23 +130,25 @@ No gameplay tags are registered today; the spike uses the plain string
 
 ## Class Layout
 
-Everything is in `GameCombat` except the native tags, which are in `GameCore`:
-`docs/technical-architecture.md:155-157` assigns shared identifiers and tags to
-GameCore, and GameUI may depend only on GameCore and presentation-safe combat
-interfaces (`:157`), so the HUD (Issue
+Everything is in `GameCombat` except the native tags and the HUD interfaces,
+which are in `GameCore`: `docs/technical-architecture.md:155-157` assigns shared
+identifiers and tags to GameCore, and GameUI may depend only on GameCore and
+presentation-safe combat interfaces (`:157`), so the HUD (Issue
 [#61](https://github.com/ShayShimoni/aetheln-online/issues/61)) can reach tags
-only if they are declared in GameCore.
+only if they are declared in GameCore, and reaches player state only through
+`AethelnHudSource.h` ([HUD State Source](#hud-state-source)).
 
 | Class or file | Module | Responsibility |
 | --- | --- | --- |
 | `AethelnGameplayTags.h/.cpp` | GameCore | Native tag declarations; adds `GameplayTags` to `GameCore.Build.cs`. |
-| `AAethelnPlayerState` | GameCombat | Owns the player ASC and attribute set as default subobjects; implements `IAbilitySystemInterface`; sets the avatar to null before first possession; binds a `UFUNCTION` handler to its own `OnPawnSet`; validates and grants configured abilities once; applies initial attributes once; sets the provisional update frequency. |
+| `AethelnHudSource.h` | GameCore | The presentation-safe HUD contract (#61): `IAethelnHudStateSource`, `IAethelnHudObjectiveSource`, and their plain data types ([HUD State Source](#hud-state-source)). |
+| `AAethelnPlayerState` | GameCombat | Owns the player ASC and attribute set as default subobjects; implements `IAbilitySystemInterface`; sets the avatar to null before first possession; binds a `UFUNCTION` handler to its own `OnPawnSet`; in `PostInitializeComponents` also binds three weak lambdas to the ASC's `OnActivationOutcome`, `OnMovementActivationOutcome` and `OnCombatActivation` delegates, which feed the HUD outcome event; validates and grants configured abilities once; applies initial attributes once; starts Endurance and Guard recovery once (#292); sets the provisional update frequency; implements the HUD state source `IAethelnHudStateSource` (#61), a read-only snapshot and owner outcome events. |
 | `UAethelnAbilitySystemComponent` | GameCombat | Project ASC for players and AI. Hosts the activation seam (request RPC, validator, per-connection sequence and rate state, seam scope with result slot, owner-only outcome RPC). Overrides the two stock client-route entry points. Provides static `FindForPawn(const APawn*)`. |
 | `UAethelnCombatAttributeSet` | GameCombat | `Health`, `MaxHealth`, `Endurance`, `MaxEndurance`, `Guard`, `MaxGuard`. |
 | `AethelnActivationTypes.h` | GameCombat | `FAethelnCombatActivationRequest`, `EAethelnActivationPhase`, `EAethelnActivationResult` (client-facing mirror of the safe reasons). |
 | `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, `CanActivateAbility` (the choke point), and `CommitAbility` (records the seam's result slot), refuses the partial `CommitAbilityCost` and `CommitAbilityCooldown`, fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
-| `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility` skeletons. |
-| `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first). All magnitudes set by caller. |
+| `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnInstantStrikeAbility` (#260 P2), which replaced the superseded skeletons, and `UAethelnParryAbility` (#260 P3), and the abstract `UAethelnStanceAbility` with `UAethelnAttackStanceAbility` and `UAethelnDefenseStanceAbility` (#260 P4; their effects, `UAethelnAttackStanceEffect` and `UAethelnDefenseStanceEffect`, are in `AethelnCombatEffects.h`) ([Representative Oathscar Actives](#representative-oathscar-actives-260)). |
+| `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first), and #292's `UAethelnEnduranceRecoveryEffect` and `UAethelnGuardRecoveryEffect` ([Resource Recovery](#resource-recovery)). All magnitudes set by caller. |
 | `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by a config soft-class path, never by editing binary assets by hand: `InputEnabledPawnClass` (`Config/DefaultGame.ini`, `/Game/POC/BP_MovementPOCCharacter`) is returned from `GetDefaultPawnClassForController`, and an empty or unloadable path keeps `DefaultPawnClass`. The mode is not the project default; a launch selects it with `?game=/Script/GameCombat.AethelnCombatGameMode`, which overrides the map's game mode. |
 | `AAethelnCombatAICharacter` | GameCombat | Base for Issue [#20](https://github.com/ShayShimoni/aetheln-online/issues/20)'s enemy: its own ASC in Minimal mode and its own attribute set. |
 
@@ -230,7 +242,7 @@ Engine facts the handler respects:
 | Server event | Action |
 | --- | --- |
 | `PostInitializeComponents` | `InitAbilityActorInfo(this, GetPawn())` (avatar null). Bind the handler. |
-| `OnPawnSet`, new pawn non-null | 1. `InitAbilityActorInfo(this, NewPawn)`. 2. If the server-only flag `bCombatStateInitialized` is false: validate and grant the configured abilities, apply `UAethelnAttributeInitEffect`, set the flag. Keyed on the flag only, never on `OldPawn`. 3. The seam becomes ready. |
+| `OnPawnSet`, new pawn non-null | 1. `InitAbilityActorInfo(this, NewPawn)`. 2. If the server-only flag `bCombatStateInitialized` is false: validate and grant the configured abilities, apply `UAethelnAttributeInitEffect` (or, for a reconnect inside the disconnect grace window, the carried state of #21 P4 in its place), set the flag. Keyed on the flag only, never on `OldPawn`. 3. The seam becomes ready. |
 | `OnPawnSet`, new pawn null (unpossess, or destroy while possessed) | 1. #60 P3 `ResetChain(AvatarLost)` stamps and ends the chain once before cancellation. 2. `CancelAllAbilities()` (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1374-1384`). 3. `SetAvatarActor(nullptr)`, only when `GetAvatarActor() == OldPawn` or `OldPawn` is null (it can be null after an `EndPlay` detach). 4. The seam rejects with `ConnectionClosed` until the next avatar. |
 | Re-possession (for example respawn) | The null case, then the non-null case. The flag stops a second grant or init, so it never refills Health or resets cooldowns. |
 | Avatar destroyed without unpossession | The seam checks avatar validity and `IsActorBeingDestroyed` on every request and rejects with `ActorDestroyed`. |
@@ -272,7 +284,7 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
 | Actor | May change attributes? | How |
 | --- | --- | --- |
 | Client | Never | No RPC accepts an attribute, magnitude, cost, cooldown, or effect. Attributes replicate down only. |
-| Server GAS | Yes | `UAethelnAttributeInitEffect` (once), `UAethelnEnduranceCostEffect` (commit), and #60's and #21's damage and restoration effects later. |
+| Server GAS | Yes | `UAethelnAttributeInitEffect` (once), `UAethelnEnduranceCostEffect` (commit), the two recovery effects (#292, [Resource Recovery](#resource-recovery)), and #60's and #21's damage and restoration effects later. |
 | Server C++ outside effects | No | No public setters. The only direct writes are the set's own clamps, through a protected setter. Reviewers reject `SetNumericAttributeBase` on combat attributes. |
 | Client prediction (P6 only) | Temporary, local | GAS applies a predicted instant effect as a temporary infinite-duration modifier and removes it on confirm or reject (`GAS/Public/GameplayPrediction.h:113-132`). |
 
@@ -295,12 +307,15 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
   holds the current value above the base. Rewriting an unchanged base still
   re-evaluates the current value, which its own clamp then lowers. The clamp
   after instant effects follows the same rule.
-- **Replication:** all six use `COND_OwnerOnly` with `REPNOTIFY_Always`. Canon
-  says opponent cues must not expose exact unrevealed resources (Secure
-  Stealth and Opponent Readability in the combat document). Owner-only fails
-  closed and is easy to widen; #61 decides later what opponents may see. Other
-  clients still get death from #21's replicated state and hit results from
-  cues. `REPNOTIFY_Always` lets prediction reconcile later
+- **Replication:** all six use `REPNOTIFY_Always`. Health and MaxHealth use
+  `COND_None`, so every client sees them; Endurance, MaxEndurance, Guard, and
+  MaxGuard use `COND_OwnerOnly`. The owner decided on #61 (2026-10-12,
+  [comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614))
+  that Health is visible to everyone while Endurance and Guard stay owner-only.
+  Canon still says opponent cues must not expose other exact unrevealed
+  resources (Secure Stealth and Opponent Readability in the combat document).
+  Other clients still get death from #21's replicated state and hit results
+  from cues. `REPNOTIFY_Always` lets prediction reconcile later
   (`GAS/Public/GameplayPrediction.h:122-132`).
 - **Resource contract mapping** (Shared Combat Semantic Contract in the combat
   document). The authored bound is the matching `Max*` attribute. The mutation
@@ -310,9 +325,237 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
   attribute, effect, or ability. Faction and Faction Doctrine inputs are outside
   #19's scope; canon Doctrine abilities arrive in a later stage.
 
+## Resource Recovery
+
+[Issue #292](https://github.com/ShayShimoni/aetheln-online/issues/292) adds
+passive and delayed recovery of Endurance and Guard on the server clock. It
+implements owner decision Q9 of #18 (approved 2026-10-10,
+[Dodge and Block](dodge-and-block.md#owner-decisions) row 16) under the
+resource grammar above. It is the first of the four recovery paths in the
+Shared Combat Semantic Contract in the combat document: "passive or delayed
+recovery advances from the server clock under explicit tags and combat-state
+conditions". Event-driven recovery, effect-supplied restoration, and lifecycle
+restoration stay with #60 and #21. Health has no passive recovery. Every rate,
+period, and delay is `TBD` (#107); this section sets none.
+
+### Mechanism
+
+- **One effect per resource.** `UAethelnEnduranceRecoveryEffect` and
+  `UAethelnGuardRecoveryEffect` (`AethelnCombatEffects`) are infinite periodic
+  Gameplay Effects. Each period executes one `AddBase` modifier on the resource
+  with `SetByCaller.Recovery.Amount`, which is `RatePerSecond * PeriodSeconds`.
+  The spec carries the period from config; the class default carries no number.
+  The recovery effect class is the mutation reason (Resource contract mapping
+  above).
+- **Started once, on the server.** `AAethelnPlayerState` starts both with the
+  initial attributes, inside the `bCombatStateInitialized` branch (Lifecycle),
+  so re-possession never starts a second recovery. `Start` and `RestartDelay`
+  refuse a non-authoritative ASC.
+- **Clients only display values.** The engine sets period timers only where
+  the effect is applied (`GAS/Private/GameplayEffect.cpp:4496-4508`) and, on
+  resume, only on authority (`:4643-4655`). A replicated copy in the owner's
+  Mixed-mode effect list never executes. Endurance and Guard reach the owner
+  through the owner-only attribute replication above. No request carries a
+  recovery value. Other clients see only the delay tags, through the minimal
+  replicated tags, as they see cooldown tags; #61 decides whether that may stay
+  (Open Decisions 12).
+- **Configuration.** `AAethelnPlayerState` reads `ProvisionalEnduranceRecovery`
+  and `ProvisionalGuardRecovery` (`RatePerSecond`, `PeriodSeconds`,
+  `DelaySeconds`) from its `Config/DefaultGame.ini` section. The section has
+  no recovery keys until #107 supplies values. All-zero values mean unset and
+  start nothing, so today Guard and Endurance still only fall. A non-finite or
+  negative value, or a positive rate without a positive period, logs and starts
+  nothing (fails closed). A zero delay is valid and means no pause after a
+  spend.
+
+### Pause and resume
+
+| Condition | Endurance recovery | Guard recovery |
+| --- | --- | --- |
+| `State.Dead` | Paused | Paused |
+| Its delay tag | `State.EnduranceRecoveryDelayed`, restarted by each Endurance cost commit | `State.GuardRecoveryDelayed`, restarted by each applied Guard pressure |
+| Anything else: blocking, dodging, `State.GuardBroken`, cooldowns, no avatar | Runs | Runs |
+
+- **Pause.** Each effect lists `State.Dead` and its own delay tag as ongoing
+  ignore tags (`UTargetTagRequirementsGameplayEffectComponent`). While either
+  holds, the effect stays applied but inhibited, and no period executes
+  (`GAS/Private/GameplayEffect.cpp:4765`).
+- **Resume.** `PeriodicInhibitionPolicy` is `ResetPeriod`, so the period
+  restarts in the server frame that processes the pause end. The first step
+  lands one period after that frame, not one period after the exact moment
+  the pause ended. When a delay ends partway through a frame, the rest of that
+  frame adds no step. Paused time is not caught up, and resuming adds nothing
+  at once. The first step after `Start` is one period later
+  (`bExecutePeriodicEffectOnApplication` is false).
+- **Delay.** `RestartDelay` removes the resource's delay effect and applies a
+  new one: the shared duration effect, with the delay tag in its
+  `DynamicGrantedTags`, as the Guard break does. Recovery therefore resumes
+  `DelaySeconds` after the latest spend, and spends never stack delays. The
+  delay length travels on the active recovery spec
+  (`SetByCaller.Recovery.Delay`), so an ASC without an active recovery, or
+  with a zero delay, gets no delay effect. A zero-duration effect would never
+  expire (Cost and cooldown).
+
+### Interactions
+
+- **Cost commits.** `UAethelnGameplayAbility::ApplyCost` is the only Endurance
+  spend. After it applies a positive cost, it restarts the Endurance delay. A
+  zero cost spends nothing and restarts nothing; a refused activation spends
+  nothing (T12).
+- **Guard pressure.** The block's Guard hook
+  ([The Guard hook](dodge-and-block.md#the-guard-hook)) restarts the Guard
+  delay after it applies positive pressure. Any later Guard-pressure source
+  must call `RestartDelay` the same way. The Parry applies no Guard pressure
+  ([The Parry](dodge-and-block.md#the-parry)).
+- **Guard break.** No rule of its own. The breaking contact's pressure
+  restarts the Guard delay like any other, and recovery resumes after the
+  delay whether or not `State.GuardBroken` still holds. Until Guard is above
+  zero, a block `Press` gets `InsufficientResource` (Q8). How the break and
+  the delay compare in length is #107's tuning.
+- **Cap.** The cap is the resource's maximum, its authored bound. The attribute
+  set clamps each step's base and current value to `[0, Max]`. There is no
+  separate recovery ceiling.
+- **Death and respawn.** `State.Dead` pauses both resources. #21 applies and
+  removes it; recovery resumes one period after the frame that removes it. A
+  running delay keeps counting on the server clock through death. Respawn
+  restores nothing through recovery: #21 P2's respawn restores Health,
+  Endurance, and Guard to their maxima through its own instant effect (owner
+  decision, issue #21, 2026-10-12;
+  [Death, Respawn, and Reconnect](death-and-respawn.md)).
+- **No avatar.** Recovery runs on the server clock while the PlayerState has
+  no pawn, as cooldowns do.
+- **Disconnect and reconnect.** Recovery belongs to the PlayerState, and a
+  disconnect only removes the connection. With the `AGameModeBase` base class,
+  a reconnect gets a fresh PlayerState, which starts one new recovery with no
+  delay; the old PlayerState's recovery ends with it. During the grace window
+  the old PlayerState is kept and its recovery keeps running (#21 P4b). A
+  reconnect inside the grace window carries the attributes and the shared timed
+  states, a running recovery delay with its remaining time among them (#21 P4,
+  [Reconnect and Carried State](death-and-respawn.md#reconnect-and-carried-state-p4-and-p4b)).
+  Recovery itself is never carried: the new PlayerState starts one.
+- **Same-timestamp order (open, #60 and #45).** Canon says the combat
+  timeline or content version declares this order, not actor tick order
+  (Shared Combat Semantic Contract in the combat document). The
+  implementation does not do that yet. Today the order follows the engine's
+  frame phases: activation requests (cost commits restart the Endurance
+  delay), then the timer pass (recovery steps and delay ends), then #60's
+  contact pass (Guard pressure restarts the Guard delay). So a spend pauses
+  the same frame's step, and a Guard step lands before that frame's contacts,
+  even a step due later in the frame than a contact. Whether a hit is blocked
+  or breaks the guard can then depend on frame boundaries. Cooldown and
+  Guard-break expiry already use the same timer pass. A step due inside a
+  frame applies at that frame. While recovery runs, a long frame applies every
+  step it covers, except the part of the frame after a pause ends (Resume).
+  The order stays open (Open Decisions 12).
+- **Neutrality.** Race, sex, and appearance are never inputs: the only inputs
+  are the PlayerState config, the two state tags, and the server clock.
+
+### Recovery tests
+
+All are **H** (headless). Steps that need time run one `World->Tick` per engine
+frame through a latent command, because the timer manager that runs periodic
+and duration effects ticks at most once per engine frame. Fixture values are
+test data, never tuning.
+
+| Test | What it proves |
+| --- | --- |
+| `Aetheln.GameCombat.Recovery.EffectDefinition` | Infinite, no step on application, `ResetPeriod`, one set-by-caller `AddBase` modifier on its resource, paused by exactly `State.Dead` and its own delay tag |
+| `Aetheln.GameCombat.Recovery.FailsClosed` | Unset config starts nothing and a restart then applies no delay; each invalid value logs and starts nothing; a zero delay applies no delay effect |
+| `Aetheln.GameCombat.Recovery.PassiveDeathAndCap` | Passive rate; `State.Dead` pauses both resources and keeps the effect; resume at the same rate; each resource stops at its maximum, base included |
+| `Aetheln.GameCombat.Recovery.DelayAfterCostCommit` | A real cost commit starts the Endurance delay (not Guard's); no recovery during it; resume one period after the frame that ends it; back-to-back commits restart it without stacking |
+| `Aetheln.GameCombat.Recovery.DelayAfterGuardPressure` | Guard pressure from a real blocked contact starts the Guard delay; a later contact restarts it, so recovery stays paused past the first delay's end; then the configured rate and the cap |
+| `Aetheln.GameCombat.Recovery.AfterGuardBreak` | The breaking pressure starts the delay; after the break and the delay end, Guard recovers and the block rises again |
+| `Aetheln.GameCombat.Recovery.RespawnAndReconnect` | Re-possession starts no second recovery; a reconnect's fresh PlayerState without a carried snapshot (no key) has one recovery per resource, at one rate, and no carried delay (the keyed carry is #21 P4's `...Death.ReconnectCarriesLivingState`); recovery continues with no avatar |
+
+Two-client PIE (**P**, manual until a harness exists): the owner sees Endurance
+and Guard rise at the provisional PlayerState frequency, and the other client
+sees neither value.
+
+## HUD State Source
+
+Issue [#61](https://github.com/ShayShimoni/aetheln-online/issues/61)'s first
+slice presents player state. `Source/GameCore/Public/AethelnHudSource.h` is the
+only interface through which `GameUI` reads it, so `GameUI` keeps depending on
+`GameCore` alone (`docs/technical-architecture.md:157`).
+
+- **Presentation only.** No HUD value or event is an input to gameplay. The
+  HUD never requests, predicts, or decides damage, cooldowns, costs, outcomes,
+  or persistence. It displays what the owning client already holds.
+- **State source.** `IAethelnHudStateSource` is implemented by
+  `AAethelnPlayerState`. `GetHudSnapshot()` returns Health, Endurance and Guard
+  with their maxima plus the timed states, and the presenter pulls a fresh
+  snapshot on every refresh so values converge to the replicated state. A
+  resource is known only when its maximum is above 0, so the HUD never reads
+  "0 / 0" before the first owner replication.
+- **Timed states.** The snapshot lists every owned `Cooldown.*` tag plus
+  `State.GuardBroken`, `State.EnduranceRecoveryDelayed` and
+  `State.GuardRecoveryDelayed` (the last two are #292's recovery delays, see
+  [Resource Recovery](#resource-recovery)). Remaining time is the longest of
+  the active timed effects that grant the tag; a negative value means no
+  duration is known. Adding a timed state means adding its tag to the list in
+  `AAethelnPlayerState::GetHudSnapshot()`.
+- **Outcome mapping.** The ASC's owner-only outcome delegates become one
+  presentation-safe event, `OnHudActionOutcome`. `OnActivationOutcome` and
+  `OnMovementActivationOutcome` map `Accepted` to Accepted and every other
+  result to Rejected, naming the owner-facing result. `OnCombatActivation` maps
+  an aim-corrected record to Corrected. The event carries no target, hit,
+  amount, or server-only detail. The three bindings are made once in
+  `AAethelnPlayerState::PostInitializeComponents` and are weak, so they end
+  with the PlayerState.
+- **Corrected and Accepted.** The server sends a step's record before that
+  request's Accepted outcome when the step starts at once, and later when the
+  step is buffered. For one non-zero sequence the presenter keeps a single cue
+  and Corrected wins; a late correction never replaces a newer action's cue.
+  Movement-carried actions have sequence 0 and always count as a new cue.
+- **Objective seam.** `IAethelnHudObjectiveSource` is the seam for the
+  authoritative objective owner (Issue
+  [#4](https://github.com/ShayShimoni/aetheln-online/issues/4)). Until #4
+  implements it a test fixture supplies the objective, and the HUD shows
+  "Objective: none".
+
+Wording, layout, colors, visual language, cue timing, and localization stay
+`TBD` until the UI pass after the P5 feel test (Open Decisions). The owner
+decided that Health is visible to everyone and Endurance and Guard stay
+owner-only (see Replication under Attribute Policy).
+
+### Two-client confirmation
+
+The harness is #21 P3's: a PIE session with a dedicated server and two clients
+on real net drivers (CQTest's `FPIENetworkComponent`). Both tests run
+`FAethelnHudPresenter`, the code `UAethelnHudWidget` ticks, on each client's
+replicated PlayerStates, and read the formatted lines. They instantiate no
+widget and simulate no input. Player A is client 0 and player B is client 1.
+The fixture attributes are test values, not tuning.
+
+| Test | Proves |
+| --- | --- |
+| `Aetheln.GameUI.Hud.TwoClientReadability` | Each HUD shows its own Health, Endurance, and Guard. Each client's copy of the other player reads Health and `Endurance --` and `Guard --`: Endurance and Guard never replicate to a non-owner, so their maxima stay at the class default of 0 and read as unknown, not `0 / 0`. A request for an ability that was never granted draws one Rejected cue on A's own HUD and none on B's own HUD, B's copy of A, or A's copy of B. The rejection leaves the server's Health, Endurance, Guard, and timed states unchanged. After the server kills A, both HUDs read A's Health as 0 and see `State.Dead`; A's own Endurance and Guard lines are unchanged and B still sees neither. After the respawn both HUDs converge back to the restored Health on A's new avatar, and a second rejected request raises one HUD event, so death and respawn left one binding. |
+| `Aetheln.GameUI.Hud.TwoClientReadabilityImpaired` | The same steps with `PktLag=100` (ms) and `PktLoss=5` (percent) on every net driver. The values are test settings, not the #45 network profile. The owner outcome is reliable, so the count stays exactly one per request. Open flake: about 1 run in 14 failed because a client never received A's new avatar within 30 s after the respawn. The cause is undiagnosed and recorded on #21 as a respawn replication suspect ([comment](https://github.com/ShayShimoni/aetheln-online/issues/21#issuecomment-6216130369)). The test stays required. |
+
+The HUD reads replicated state only. Neither test sets a client value, and the
+server is the state the clients converge to. This confirms what the HUD shows
+under impairment; it does not judge feel or visual language, which wait for the
+UI pass. The #19 rows T23 to T28 stay with #19.
+
+Not part of this confirmation, and still open for #61:
+
+- **Respawn deadline.** The server does not replicate it to the owner, and
+  `docs/death-and-respawn.md` (Residual Limitations) leaves the mechanism to #61
+  (a replicated deadline or a timed effect). Undecided, so not built.
+- **Death state as a HUD line.** The snapshot's timed list excludes `State.Dead`
+  because its effect is infinite. Today death reads as Health 0.
+- **Presentation of an opponent's Health** (nameplate or similar), and enemy
+  telegraph cues (#20): the visual language is `TBD`.
+- Endurance and Guard rising at the PlayerState frequency (the manual step
+  under Resource Recovery) stays manual.
+- **Opponent view of timed states.** The tests do not assert an opponent's timed
+  states. Non-owners see cooldown and recovery-delay tags through the minimal
+  replicated tags, and whether opponents may see the delay tags is an owner
+  decision (Open Decisions 12; stance visibility in Open Decisions 5).
+
 ## Abilities
 
-All three derive from `UAethelnGameplayAbility`.
+Every representative active derives from `UAethelnGameplayAbility`.
 
 - **Policies:** `InstancedPerActor`, `NetExecutionPolicy = ServerOnly`,
   `NetSecurityPolicy = ServerOnly`. The engine itself then rejects client
@@ -328,13 +571,14 @@ All three derive from `UAethelnGameplayAbility`.
   the spike (`Source/GameCombat/Public/AethelnSpikeAuthorityComponent.h:60-70`).
   Identity, cooldown tag, and activation tag rules are structure in the C++
   constructor. Until #107 and #45 decide, each section sets `ContentVersion=1`
-  and both placeholders to 0, which means no cost and no cooldown; automation
-  tests set their own values on the granted instances. `AAethelnPlayerState`
-  grants the three, in order, from `+GrantedAbilities` entries in its own
-  section.
+  and both placeholders to 0, which is unset: a zero cost is no cost, and for
+  an ability that must have a cooldown (Instant Strike, K1) a zero cooldown
+  fails grant. Automation tests set their own values on fixture subclasses.
+  `AAethelnPlayerState` grants the abilities listed in its own `+GrantedAbilities`
+  entries, none of the #260 actives until their values exist.
 - **`State.Dead`** blocks every project ability: the base constructor adds it
   to `ActivationBlockedTags`.
-- **Phase:** Press only by default; `bAcceptsRelease = false` for all three.
+- **Phase:** Press only by default; `bAcceptsRelease = false` for every representative active.
 - **`CostGameplayEffectClass` and `CooldownGameplayEffectClass` stay null.**
   The overrides apply the shared effects directly, so the engine's cost check
   never evaluates set-by-caller magnitudes that have no value.
@@ -351,13 +595,18 @@ All three derive from `UAethelnGameplayAbility`.
   itself directly with `EndAbility`, as the seam's `EndForRelease` does, whether
   or not its commit succeeded. A C++ subclass could still call `ApplyCost`,
   `ApplyCooldown`, or `CommitExecute` directly, which Blueprint cannot; review
-  refuses that, so `CommitAbility` stays the only spend. The three skeletons do
-  not override `ActivateAbility`; they inherit the base one, which follows both
-  rules, and T17 pins them. Hold the Line may
-  later hold its own state tag while active, `State.<Order>.<Name>` under the
-  conventions (for example `State.Oathscar.HoldTheLine`, a technical
-  identifier, not a display name). The PR that creates it adds it to the
-  Initial entries table. Hold the Line's duration-or-hold behavior is `TBD`.
+  refuses that, so `CommitAbility` stays the only spend. An ability that
+  does not override `ActivateAbility` inherits the base one, which follows both
+  rules. The chain's `ActivateAbility`, which Instant Strike inherits,
+  commits once through `CommitAbility`, then joins the timeline and ends at
+  its `RecoveryEnd`; T17 pins that path for the strike. The plain cost-commit
+  test ability in the Editor test module pins the base one (the recovery
+  test). An active that holds its own state tag uses
+  `State.<Order>.<Name>` under the conventions (for example
+  `State.Oathscar.Parrying`, a technical identifier, not a display name); the
+  PR that creates it adds it to the Initial entries table. The #260 actives
+  that replace the skeletons are specified in
+  [Representative Oathscar Actives](#representative-oathscar-actives-260).
 
 **Grant-time validation.** `AAethelnPlayerState` refuses to grant, and logs,
 any configured class that:
@@ -405,8 +654,8 @@ added only when a canon ability spends that resource. `CommitAbility`
 re-checks and applies both. A zero cost or a zero cooldown applies no effect:
 a duration effect without a positive duration gets no expiry timer
 (`GAS/Private/GameplayEffect.cpp:4438-4441`), so it would never end. Recovery
-windows, cooldowns, and resource recovery are separate states, and resource
-recovery is not #19 scope.
+windows, cooldowns, and resource recovery are separate states. Resource
+recovery is not #19 scope; #292 owns it ([Resource Recovery](#resource-recovery)).
 
 ### Prediction
 
@@ -424,13 +673,15 @@ the reliable owner outcome tells #61 and Issue
 optimistic presentation.
 
 Whether #19 can close without P6 is an owner decision after the P5 two-client
-PIE feel test, recorded as candidate TC-008. If approved, P6 predicts only Hold
-the Line's activation, Endurance cost (if it has one), cooldown, and own state
-tag: self-only
+PIE feel test, recorded as candidate TC-008. If approved, P6 predicts only one
+approved ability's activation, Endurance cost (if it has one), cooldown, and
+own state tag: self-only
 and reversible, with no contact, Guard result, or damage predicted (Prediction
-Matrix in the combat document). The mechanism uses only engine hooks:
+Matrix in the combat document). TC-008 named Hold the Line, which the owner
+dropped on 2026-10-13; which representative active, if any, takes its place
+is open (Open Decisions 1). The mechanism uses only engine hooks:
 
-- Hold the Line becomes `LocalPredicted` with `ServerOnlyTermination`: a client
+- The approved ability becomes `LocalPredicted` with `ServerOnlyTermination`: a client
   may request execution but never end or cancel it. Grant validation accepts
   that pair only for abilities on the approved prediction list (T15 and T20
   change to match).
@@ -454,6 +705,249 @@ Matrix in the combat document). The mechanism uses only engine hooks:
   follow on the same ordered channel. The server pairs the engine activation
   with the validated pending request and refuses any activation without one.
   This uses two messages and keeps per-handle pending state.
+
+## Representative Oathscar Actives (#260)
+
+On 2026-10-13 the owner replaced the three representative actives
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904);
+canon in
+[Characters and Factions](characters-and-factions.md#sword-and-shield-prototype-candidate)).
+This section is the implementation specification for
+[#260](https://github.com/ShayShimoni/aetheln-online/issues/260): the shared
+rules, the stance buffs, the action relations, the phased plan, the tests,
+and every open decision. Instant Strike's timeline is specified in
+[Attack Timeline and Three-Hit Combo](attack-timeline-and-combo.md#instant-strike),
+the Parry's window and stagger in
+[Dodge and Block](dodge-and-block.md#the-parry), and the stance's removal on
+death in [Death, Respawn, and Reconnect](death-and-respawn.md). No numeric
+value is set here except the owner's provisional 600 s stance duration.
+
+| Active | Stable ID | Ability class | Identity tag |
+| --- | --- | --- | --- |
+| Instant Strike | `order.oathscar.ability.instant_strike` | `UAethelnInstantStrikeAbility` | `Ability.Oathscar.InstantStrike` |
+| Parry | `order.oathscar.ability.parry` | `UAethelnParryAbility` | `Ability.Oathscar.Parry` |
+| Attack Stance | `order.oathscar.ability.attack_stance` | `UAethelnAttackStanceAbility` | `Ability.Oathscar.AttackStance` |
+| Defense Stance | `order.oathscar.ability.defense_stance` | `UAethelnDefenseStanceAbility` | `Ability.Oathscar.DefenseStance` |
+
+### Shared rules
+
+- **Base and policies.** Each class derives from `UAethelnGameplayAbility`
+  (Instant Strike through `UAethelnBasicChainAbility`), is
+  `InstancedPerActor` and `ServerOnly` in both net policies, and is activated
+  only through the ordinary seam with a `Press`; `bAcceptsRelease = false`.
+  The client sends the ability id, aim, and time sample only. It never names a
+  target, claims a hit, a parry, or a stagger, or picks a stance effect.
+- **Nothing is predicted.** No active is on an approved prediction list
+  (Open Decisions 1). The client may play cosmetic anticipation that the
+  outcome cancels.
+- **Identity and version.** Native tags declared in GameCore whose comments
+  are the stable IDs. They are new identities, so each starts at
+  `ContentVersion=1`. Instant Strike and Parry have their own
+  `Cooldown.Oathscar.<Name>` tags; the stances have no cooldown tag.
+- **Fail closed.** Every value is config, unset in production; an unset value
+  refuses the grant with a log, as the chain and block do. The actives stay out
+  of `GrantedAbilities` until authored values exist (owner, 2026-10-12, for
+  the earlier actives; carried over). Tests set their own values. The one
+  exception is the owner's provisional stance duration: P4 sets
+  `ProvisionalStanceDurationSeconds=600` in `Config/DefaultGame.ini`, while
+  the stances stay out of `GrantedAbilities` until their magnitudes exist.
+- **Superseded skeletons.** P2 removed `UAethelnGateStepAbility`,
+  `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility`, their tags and
+  ini sections, and moved the tests that used them (T17, T19, T20, and the HUD
+  and resource-recovery tests) to the new classes and to a plain cost-commit
+  test ability. The single-step chain support from the closed PR #344's branch
+  (`feature/260-oathscar-contacts`) was reused; its Hold the Line block
+  subclass and Gate Step contacts were not. The interruption path and the A25
+  to A27 replay fixtures serve K4 and K7.
+
+### Stance
+
+- **Two abilities, two effects.** `UAethelnAttackStanceAbility` and
+  `UAethelnDefenseStanceAbility` share an abstract `UAethelnStanceAbility`.
+  Each applies one duration effect, `UAethelnAttackStanceEffect` or
+  `UAethelnDefenseStanceEffect`, which grants its exclusive state tag,
+  `State.Oathscar.AttackStance` or `State.Oathscar.DefenseStance`. The
+  duration comes from `SetByCaller.Stance.Duration`, read from
+  `ProvisionalStanceDurationSeconds` (600 in `Config/DefaultGame.ini`, the
+  owner's provisional value, re-tuned at the feel test). A zero or non-finite duration refuses the grant.
+- **Instant and uncooled.** `ActivateAbility` commits, removes every active
+  effect that grants either stance tag, applies its own effect, and ends, all
+  in one server call; there is no timeline step and no commitment tag. A
+  positive `ProvisionalCooldownSeconds` refuses the grant: no cooldown is an
+  owner rule, not tuning. Whether a cast costs Endurance is `TBD`.
+- **Mutual exclusion.** Because the removal and the application happen in one
+  activation, at most one stance effect exists after any accepted cast, and
+  two casts in one frame resolve in seam order: the later one wins. Recasting
+  the active stance replaces its effect, which restarts the duration (lane
+  default, open).
+- **Removal on death.** Both effects carry a removal tag requirement on
+  `State.Dead` (`TargetTagRequirementsGameplayEffectComponent::RemovalTagRequirements`,
+  `GAS/Public/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.h:57`),
+  so applying the death effect removes the stance at the processing time and
+  refuses a new one. Respawn restores only Health, Endurance, and Guard, the
+  declared allowlist (owner, option A,
+  [issue #21](https://github.com/ShayShimoni/aetheln-online/issues/21#issuecomment-6142791700)),
+  so no stance returns ([Death, Respawn, and Reconnect](death-and-respawn.md#server-death-transition-p1-extended-by-p2)).
+- **Magnitudes.** What each stance changes, and by how much, is `TBD`
+  (#107). The likely entry points are the outgoing damage at #60 resolution
+  step 7 for the attack stance and the family mitigation at step 5 for the
+  defense stance, but that is a design decision, not made here. Until it is
+  made the effects carry their tag and no modifier. Neither ever modifies a
+  `Max*` attribute (A18's rule).
+- **Lifecycle and replication.** The effect lives on the PlayerState ASC, so
+  it survives re-possession and keeps counting with no avatar, as cooldowns
+  do. In Mixed mode the owner receives the effect and other clients only the
+  tag; what opponents see is #61's. #21 P4's reconnect snapshot does not name
+  the stance (it carries the attributes and the shared timed-state effect
+  only), so a reconnect carries a stance only if its effect is that shared
+  class; whether it should is open.
+- **As built (#260 P4).** The provisional 600 s lives in one place, the
+  `[/Script/GameCombat.AethelnStanceAbility]` section of `Config/DefaultGame.ini`,
+  which both stances read as their parent class; each stance has its own section
+  only for `ContentVersion=1`, a cost of 0, a cooldown of 0, and
+  `bAcceptsRelease=False`. Grant validation requires a Press-only seam ability, a
+  finite positive duration, no cooldown, and the blocking tags of the commitment
+  windows (plus `State.Dead` and `State.Staggered` from the base). Because the
+  duration is set, the production stances pass grant validation; they stay out
+  of `GrantedAbilities` until their magnitudes are decided, so this is the one
+  exception to T20's "unset values refuse the grant". The cast commits first, so a
+  refused commit (`InsufficientResource`) removes nothing, then removes every
+  active effect that grants either stance tag, applies its own effect with
+  `SetByCaller.Stance.Duration`, and ends uncancelled. The effects carry the state
+  tag and no modifier; `UAethelnStanceEffect` is their abstract base.
+
+### Bindings (as built, #260 P5)
+
+- **The route.** `UAethelnPOCInputComponent` creates one Boolean Enhanced Input action for each active (`IA_POC_InstantStrike`,
+  `IA_POC_Parry`, `IA_POC_AttackStance`, `IA_POC_DefenseStance`) and binds `Started` to a handler that calls
+  `RouteActivePress(Mode, Controller, AbilityId)`. That sends the press through `SubmitAbilityPress`, the generalization of
+  `SubmitPrimaryAttack`, to the local controller's PlayerState as an `IAethelnCombatInputSink`, and from there to the ASC's
+  `RequestActivation`. The press is Reticle mode only: in Cursor mode nothing is sent. These keys have no recapture role, so they
+  do not go through `FAethelnPrimaryButtonRouter`. The client sends the ability id, aim and time sample only, as for the chain.
+- **Keys: #82.** The layout is #82's and no key is chosen in code or in a tracked ini. Each action's key is a `FKey` config property of
+  the component (`InstantStrikeKey`, `ParryKey`, `AttackStanceKey`, `DefenseStanceKey`, section
+  `[/Script/GameUI.AethelnPOCInputComponent]`); an invalid key, the default, maps nothing, so the press has no way in until a run
+  or #82 supplies one. The keys stay open for #82.
+- **Ungranted is inert.** `GrantedAbilities` is unchanged (owner, issue #260 comment
+  [6142715904](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)), so in production the server
+  answers a press of an active with `ActivationBlocked`: nothing is spent, started or applied. It is an ordinary rejected request,
+  with the owner's `Log`-level `LogAethelnActivationOutcome` line and the seam's usual outcome record. As for the chain, each press
+  still takes a token from the per-connection rate bucket.
+
+### Action relations
+
+| Relation | Rule | Status |
+| --- | --- | --- |
+| Instant Strike inside the chain's commitment window | Refused with `ActivationBlocked`, as dodge and block are | Decided (owner, 2026-10-13, [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142792186)); implemented in P2 |
+| Instant Strike or Parry while dodging or blocking | Refused (`State.Dodging`, `State.Blocking` in their blocking tags) | Default carried from the owner's 2026-10-12 relations for the earlier actives; open to confirm. Instant Strike implemented in P2; Parry implemented in P3 |
+| Any action inside Instant Strike's own commitment window | Refused, as for the chain's commitment tag | Default, open. Implemented in P2: `State.Oathscar.InstantStrike` is a blocking tag of the dodge, the block, and the chain (and a reset tag of the chain) |
+| An accepted active after a commitment window | Resets the chain (`OtherAction`), the existing #60 rule | Existing rule |
+| Parry inside the chain's commitment window | Refused (also inside Instant Strike's) | Default, open. Implemented in P3 |
+| Parry and block | Refused both ways: one defense slot per ASC (`State.Blocking` blocks the Parry, `State.Oathscar.Parrying` blocks the block) | Default, open (the owner may prefer a parry that ends the block). Implemented in P3 |
+| An attack press (the chain or Instant Strike) during the Parry window | Refused until the window ends, as the block refuses it (Q10): `State.Oathscar.Parrying` is a blocking and a reset tag of the chain, which Instant Strike inherits. The refusal spends nothing and ends nothing | Decided (owner, 2026-10-14, [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6156696832)); implemented in P3 |
+| A dodge accepted during a Parry window | Ends the window at the dodge's acceptance, as it ends a block (Q10) | Default, open. Implemented in P3 (`CancelParry`) |
+| A stance cast inside a commitment window, and whether it resets the chain | Refused inside; resets after, as any committed action | Default, open (the owner may exempt the stance). Implemented in P4: `State.Oathscar.SwordShieldBasicChain` and `State.Oathscar.InstantStrike` are blocking tags of both stances; the reset after is the seam's existing `OtherAction` rule. Nothing is set for a stance cast while dodging, blocking, or inside a Parry window, so no blocking tag is added for them (open). As built, a stance cast during a dodge, a raised block or an open Parry window is therefore accepted and ends none of them (`State.Blocking` and `State.Oathscar.Parrying` and their slots still hold); K10 pins the block and Parry legs, and the dodge leg is the same by construction and not pinned separately. Whether a stance should be refused or should end them is the owner's open item 6, not decided here |
+| What a staggered player may do | Every project ability is refused while `State.Staggered` holds; movement is unrestricted (#60 OQ4) | Default, open. Implemented in P3: `State.Staggered` is a blocking tag of the base ability and a reset tag of the chain |
+
+### Phased plan
+
+Each PR targets `develop`, uses `Refs #260`, and stays small.
+
+| Phase | Scope | Depends on |
+| --- | --- | --- |
+| **P1** Canon | Canon, registry, and these specifications. No code. | Owner decisions of 2026-10-13 |
+| **P2** Instant Strike | Single-step chain support (step count and commitment tag read from the chain state), `UAethelnInstantStrikeAbility`, its tags and config, its grant validation, its relations; removal of the three superseded skeletons and their tags; K1 to K4, K13 (Instant Strike rows), and the T17, T19, T20 moves. | P1; #60 P5 |
+| **P3** Parry | `UAethelnParryAbility`, `State.Oathscar.Parrying`, the `Parried` consequence, the window boundaries, the forced attacker interruption, `State.Staggered` and its effect, the relations; K5 to K9. | P2; #18 P4 |
+| **P4** Stance | The stance abilities and effects, exclusion, death removal; K10 to K12. | P2 |
+| **P5** Bindings and two-client evidence (built) | The four Enhanced Input actions and `RouteActivePress` / `SubmitAbilityPress` through #60's input sink, with no key chosen (keys: #82, open; [Bindings](#bindings-as-built-260-p5)); K14 as a two-client CQTest PIE run, clean and under a fixture 100 ms lag and 5 % loss, and as manual PIE steps under the #82 conditions C1 and every C2 kind ([Manual K14 steps](#manual-k14-steps-82)); the PR 361 lows (the stance relation row, K10 and K13). `GrantedAbilities` is untouched. | P4; #60 P6; #19 P5 |
+
+### Test plan
+
+Names follow `Aetheln.<Area>.<Group>.<Case>`; kinds as in [Test Plan](#test-plan).
+Every test sets its own values, never tuning. The network-condition rows reuse
+#60's scripted delivery profiles (A25 requests, A26 contacts, A27 teardown) and
+its PIE rows (A19 to A21) under the same conditions.
+
+| # | Test | Phase | Kind | What it proves |
+| --- | --- | --- | --- | --- |
+| K1 | `Aetheln.GameCombat.OathscarActives.InstantStrikeDefinition` | P2 | H | Grant refused unless there is exactly one step that obeys the final-step rules, `GuardPressure` is 0 and `bInterruptsTarget` is false (owner: pure damage), the commitment tag is its own and not self-blocking, and the chain commitment tag is both a blocking tag and an authored reset tag; unset values fail closed; a zero cooldown is refused (owner: the strike has a cooldown) and a positive one accepted |
+| K2 | `Aetheln.GameCombat.OathscarActives.InstantStrikeContact` | P2 | H | A press registers one step at the acceptance time; a target capsule in the authored volume takes one Wrought result through the damage effect; a blocking target loses no Guard; nothing is interrupted; a second activation can hit again |
+| K3 | `Aetheln.GameCombat.OathscarActives.InstantStrikeRelations` | P2 | H | `OnCooldown` with nothing spent; refused inside the chain's commitment window, accepted after it and resets the chain with `OtherAction`; the relation defaults above; `State.Dead` refuses |
+| K4 | `Aetheln.GameCombat.OathscarActives.InstantStrikeNetworkConditions` | P2 | H | A25 profiles: requests delayed across the cooldown end and the chain's `CancelOpen` get the outcome their arrival time dictates; duplicated gives `DuplicateSequence`, reordered `StaleSequence`, dropped commits nothing; A26 against a dummy: at most one result per activation and none from a rejected request; A27: teardown before the active window, inside it before the contact, and after the contact ends the step once with no later contact; the cooldown end is simulated by removing the cooldown effect, because the headless world does not expire duration effects |
+| K5 | `Aetheln.GameCombat.OathscarActives.ParryDefinition` | P3 | H | Grant refused for non-finite values, a window that is empty or starts before acceptance, an arc outside `(0, 360]`, a negative stagger, or a Release phase; unset values fail closed |
+| K6 | `Aetheln.GameCombat.OathscarActives.ParryWindowBoundaries` | P3 | H | Partial (the duplicate-candidate leg is #60's allowance, tested there): enemy contacts just before the window start (hit), at the start (parried), just before the end (parried), at the end (hit), and outside the arc (hit); a parried contact with authored Guard pressure changes no Health or Guard and calls the hook once; a parried result emits one Block event |
+| K7 | `Aetheln.GameCombat.OathscarActives.ParryStaggersAttacker` | P3 | H | A parried enemy's registered steps are stamped at the contact time, its later contacts drop, and `OnTargetInterrupted` fires once, whatever its `InterruptibleUntil`; with a test-only hostile player relation, the attacker's chain ends with `Interrupted` at the contact time and `State.Staggered` holds for the test duration; a zero duration grants nothing, and with no stagger and no chain commitment left the same block raise by that attacker is accepted (the positive control for the staggered refusals); a lethal or avoided contact staggers no one |
+| K8 | `Aetheln.GameCombat.OathscarActives.ParryRelations` | P3 | H | The relation defaults above and the decided attack-press rule (owner, 2026-10-14, [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6156696832)): the chain and Instant Strike are refused while the window is open, the refusals spend and end nothing, and a press after the window end is accepted; `State.Dead` and avatar loss end the window at the processing time |
+| K9 | `Aetheln.GameCombat.OathscarActives.ParryNetworkConditions` | P3 | H | Partial (the window-end contacts are K6's; delivery is varied around the window start only): A25 profiles: a parry request delayed to arrive just before and just after an enemy contact is judged by its server arrival time; duplicated, reordered, and dropped requests open no second window; A27 teardown inside the window |
+| K10 | `Aetheln.GameCombat.OathscarActives.StanceExclusive` | P4 | H | A cast applies its effect with the configured duration, one Endurance spend, and no cooldown effect, and ends itself uncancelled (the stances' share of T17); the ini carries the provisional 600 s for both stances; the other stance's cast removes it; never both, including three casts in one frame; the recast default (it replaces the effect and restarts the duration); a cast the commit refuses removes nothing; a content-version mismatch changes nothing; refused inside the chain's and Instant Strike's commitment windows with nothing spent, accepted after them and resets the chain with `OtherAction`; accepted during a raised block and inside a Parry window, ending neither (the current relation, open) |
+| K11 | `Aetheln.GameCombat.OathscarActives.StanceRemovedOnDeath` | P4 | H | Death, through the real death transition, removes the active stance at once; no cast while dead and the stance effect cannot be applied to a dead player; after respawn Health, Endurance, and Guard are restored and no stance exists, and a new cast is accepted; avatar loss and re-possession keep the same stance effect |
+| K12 | `Aetheln.GameCombat.OathscarActives.StanceNetworkConditions` | P4 | H | A25 profiles: duplicated (also after a later cast replaced the stance), reordered, and dropped casts leave at most one stance effect and spend nothing twice; a delayed cast is judged at its arrival (the duration starts then) and one arriving after death is refused and spends nothing |
+| K13 | `Aetheln.GameCombat.OathscarActives.DefinitionsAndTags` | P2 to P4 | H | Unique `Ability.` tags whose comments are the stable IDs, version 1, the policies above (the stances with no cooldown tag), the stance grant rules (a finite positive duration, no cooldown, Press-only, the blocking tags), the production stances pass grant validation (the one exception to T20, still ungranted), no superseded skeleton or tag remains |
+| K14 | `Aetheln.GameCombat.Net.OathscarActivesTwoClient`, `Aetheln.GameCombat.Net.OathscarActivesTwoClientImpaired`, and the routing companion `Aetheln.POC.Input.ActiveBindingsRoute` (H) | P5 | P | A19 to A21 conditions, with the fixture actives granted (the production ones stay ungranted). Companion (H): a Reticle-mode press of each active is accepted by its own ability through `RouteActivePress`, a Cursor-mode press and a press with no controller send nothing, and with no active granted each press is `ActivationBlocked` with nothing spent, started or applied; the tracked ini maps no key. PIE, on a clean link and under a fixture 100 ms lag and 5 % loss: the attacker presses Instant Strike, Parry, Attack Stance and Defense Stance in turn through the GameUI entry, each accepted. The owner receives four ordered outcomes, one record (Instant Strike, step 1, a `Completed` chain end) and its own stance effect, never two and never both tags; the server commits one hit and four Endurance spends and holds one stance effect; the observer sees the strike's phase state, the Parry tag while the window is open, and the stance tags, never a stance effect, an outcome, a record or a chain end, and the owner's own copy of the phase state never changes (`COND_SkipOwner`); a clean link shows one result cue per hit on each client. Red-first: with a stub that sends the chain's id whatever it is given, the companion fails at "The record names Instant Strike", the PIE runs time out in "Press the four actives in turn", and K10's new block and Parry legs fail at "A stance cast during the raised block is accepted" when the stances are given those blocking tags. Each C2 kind (`PktLagVariance`, `PktOrder`, `PktDup`, and the others) is not simulated here: the reliable channel absorbs duplication and reordering before the seam sees a request, and the seam's own rows for them are K4, K9 and K12. They are the manual steps below |
+
+### Manual K14 steps (#82)
+
+The automated rows prove the routing and the owner and observer split; these steps measure the bound keys and each C2 kind with a
+person at the keyboard, which the harness cannot. They cannot run on the production configuration: the actives are not in
+`GrantedAbilities`, the values of Instant Strike and Parry are `TBD`, and the eight aim and time bounds are `TBD` and unset (the seam
+fails closed). A run supplies candidate values locally and untracked (for example in `Saved/Config/WindowsEditor/Game.ini`: the
+eight `Provisional...` keys of `/Script/GameCombat.AethelnAbilitySystemComponent`, `+GrantedAbilities` of the four active classes under
+`/Script/GameCombat.AethelnPlayerState`, `ProvisionalInitialAttributes` of `/Script/GameCombat.AethelnPlayerState` and of
+`/Script/GameCombat.AethelnCombatAICharacter` (the tracked ini leaves both at 0, so a press that costs Endurance is
+`InsufficientResource` and a target has no Health to lose), the class sections of Instant Strike and Parry, and the four key slots of
+`[/Script/GameUI.AethelnPOCInputComponent]`) and records them verbatim as candidate values for that run, never as tuning. Keys: #82; the
+key slots are the run's own choice and decide nothing. The stance cost is `TBD` and 0 unless the run supplies one, so a stance press
+shows no Endurance change: count its spend from the outcome line, not from Endurance.
+
+The run uses the `/Game/Maps/MovementPOC` map (`/Game/Maps/MovementPOC?game=/Script/GameCombat.AethelnCombatGameMode`). The game
+mode spawns no target, and the enemy placed in that map is #83 P4 ([Enemy AI and Navigation](enemy-ai-and-navigation.md), residual
+risk 7), not yet on `develop`. So the run places an `AAethelnCombatAICharacter` in front of client 1's start in the PIE level, untracked,
+and records where with the result.
+
+1. PIE net mode "Play As Client", two players and a separate server, launched with
+   `?game=/Script/GameCombat.AethelnCombatGameMode`, under C1 (clean). On client 1, in Reticle mode, press each bound key: Instant
+   Strike (the target loses the damage the run authored once), Parry (the window opens and closes), Attack Stance, then Defense Stance (it
+   replaces the first). Client 2 watches client 1: it must see the strike's phase state, the Parry and stance tags, and cues, and no
+   outcome, record or Endurance change. Client 1's log prints one `LogAethelnActivationOutcome` line per press.
+2. Switch to Cursor mode with Left Alt, then press each key: nothing is sent and the log prints no outcome line. Left Alt again
+   returns to Reticle mode, and a click after that is an attack. To recapture, click once in Cursor mode instead (the click is not an
+   attack and returns to Reticle mode); a fresh key press is needed after either.
+3. Repeat step 1 under each C2 kind of the #44 catalog (`Net PktLag`, `PktLagVariance`, `PktLoss`, `PktOrder`, `PktDup`, applied to the
+   side recorded with the result). For every press record the outcome and its reason (the outcome log line), Endurance before and after for Instant Strike
+   and Parry (one spend per accepted press, never two; a stance shows none while its cost is 0, so for the stances read one outcome per
+   press), the stance effects held (at most one), the hits taken by the target (one per strike), and client 2's view.
+   No duplicate, reordered or delayed request may commit twice.
+4. With no key bound, `Aetheln.Combat.Request <AbilityId> Press` with each active's `Ability.` tag starts the same press through the
+   seam, bypassing the key and the Reticle gate; it is the way to run steps 1 and 3 before #82 decides the layout.
+5. With the actives left out of `+GrantedAbilities` (the production state), every press, bound or by console, is answered
+   `ActivationBlocked`: nothing is spent, started or applied.
+
+### Open decisions for the representative actives
+
+All stay `TBD` until the owner (product) or #107 and #45 (values) decide.
+
+1. **Instant Strike values:** damage, cooldown, Endurance cost, the active
+   window, recovery, `CancelOpen`, shape and path, `MaxTargets`, and the pitch
+   clamp. Whether "hits on press" means the active window opens at acceptance
+   (`ActiveStart = 0`, the lane reading) or after a short authored wind-up.
+2. **Parry values:** the window start and end, the stagger duration, the arc,
+   cooldown, and Endurance cost.
+3. **Parry rules:** whether the arc is directional (the canon's directional
+   defense, the default) or full; whether a parry needs or spends Guard
+   (default: neither); whether one window parries every contact inside it (the
+   default) or ends at the first parry.
+4. **Stagger:** what a staggered player may do (default above), whether the
+   stagger restricts movement, how it relates to #60's OQ10 victim lockout,
+   and what a staggered enemy does (#20).
+5. **Stance:** the magnitudes, the modified quantities and their place in the
+   resolution order, the Endurance cost, the recast default, what opponents
+   see (#61), and whether a reconnect carries it (#21 P4 carries the shared timed-state effect only).
+6. **Relations** marked default or open in [Action relations](#action-relations).
+7. **Prediction:** whether any active replaces Hold the Line as the TC-008
+   candidate (Open Decisions 1).
+8. **Final names** of the four abilities.
+9. **The Skein entries** superseded with the earlier actives are redesigned in
+   a later Skein pass (owner, 2026-10-13).
 
 ## Activation Seam
 
@@ -656,7 +1150,7 @@ server displacement once. Re-possession revives none of them. See
 included), accepts forward gaps, never wraps, and lives for one PlayerState
 lifetime. A client that jumps to the maximum only makes its own later requests
 stale. With the `AGameModeBase` base class pinned in Class Layout, a reconnect
-gets a new PlayerState and starts at 1 (see Known Interim Gaps).
+gets a new PlayerState and starts at 1.
 
 **Input-contract findings** (numbers from the Issue
 [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) review). The
@@ -736,15 +1230,52 @@ marker and specialized definition through base-pointer callers.
    choke point makes any activation through them fail on a player ASC. Review
    rule: no project Blueprint calls them on a player ASC.
 
-Other engine client-to-server RPCs have no gameplay effect in this design, and
-these rules keep it so:
+The engine declares 16 `Server` RPCs on `UAbilitySystemComponent` in the pinned
+UE 5.8.1 (all in `GAS/Public/AbilitySystemComponent.h`; its base
+`UGameplayTasksComponent` declares none). The audit below (#324) gives the
+state of each on the production `UAethelnAbilitySystemComponent`. "Closed"
+means a project override refuses it with the shared `RefuseStockRoute`
+contract (`AethelnAbilitySystemComponent.cpp:1014`): one bucket token, a
+metric only, no reply. Production abilities set `NetSecurityPolicy =
+ServerOnly` (`AethelnGameplayAbility.cpp:14`), and grant validation refuses
+any other policy.
 
-| RPC | Status | Rule |
+| RPC (engine header line) | State on the production ASC | Evidence and reason |
 | --- | --- | --- |
-| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | Refused by virtual generated `_Implementation` overrides on the project ASC (#60 P2); no cache write. | Each draws one bucket token, emits a metric only and sends no reply. No project ability uses target-data tasks. |
-| `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | The engine implementations write the same cache through `InvokeReplicatedEvent` / `InvokeReplicatedEventWithPayload`; project `_Implementation` overrides refuse them (#60 P2). | Same token/metric/no-reply contract; no project ability uses replicated-event tasks. |
-| `ServerSetInputPressed`, `ServerSetInputReleased` (`GAS/Public/AbilitySystemComponent.h:1618-1622`) | Only update spec input state (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`). | Phase comes only from the request. Abilities must not read `InputPressed` or `InputReleased`. |
-| Montage section and play-rate RPCs (`GAS/Public/AbilitySystemComponent.h:1803-1812`) | Presentation only. | No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). |
+| `ServerTryActivateAbility`, `ServerTryActivateAbilityWithEventData` (`:1724`, `:1727`) | Closed. Both reach the virtual `InternalServerTryActivateAbility`, overridden at `AethelnAbilitySystemComponent.cpp:1027`. The engine also refuses `ServerOnly` abilities (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2087-2093`). | `ActivationSeam.StockRoutesRefused` |
+| `ServerAbilityRPCBatch` (`:1311`) | Closed. The virtual `ServerAbilityRPCBatch_Internal` drops the whole batch and its target data (`AethelnAbilitySystemComponent.cpp:1036`). | `ActivationSeam.StockRoutesRefused` |
+| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`:1572`, `:1576`) | Closed (`AethelnAbilitySystemComponent.cpp:1041`, `:1051`); no cache write. | `AttackTimeline.ReplicatedDataRoutesRefused`. No project ability uses target-data tasks. |
+| `ServerSetReplicatedEvent`, `ServerSetReplicatedEventWithPayload` (`:1554`, `:1558`) | Closed (`AethelnAbilitySystemComponent.cpp:1059`, `:1068`); the engine versions write the same cache through `InvokeReplicatedEvent`. | `AttackTimeline.ReplicatedDataRoutesRefused`. No project ability uses replicated-event tasks. |
+| `ServerPrintDebug_Request`, `ServerPrintDebug_RequestWithStrings` (`:1250`, `:1254`) | Closed in every build (#324; `AethelnAbilitySystemComponent.cpp:1078`, `:1083`). | `ActivationSeam.DebugRequestsRefused`. Reason below. |
+| `ServerEndAbility`, `ServerCancelAbility` (`:1736`, `:1742`) | Refused by the engine for `ServerOnly` abilities (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2222-2235`, `:2248-2257`; both skip a spec whose policy is `ServerOnlyTermination` or `ServerOnly`). No project override. | Every production ability is `ServerOnly` in both net policies, enforced at grant. A non-production ability on the production ASC would be a grant-validation failure. No automation test pins the engine's refusal. |
+| `ServerSetInputPressed`, `ServerSetInputReleased` (`:1618`, `:1621`) | Open, by design. They only set `FGameplayAbilitySpec::InputPressed` and pipe `InputPressed` / `InputReleased` to an already-active ability instance (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`, `:2915-2952`). | Nothing activates, commits or reads a result. Activation phase comes only from the request. Abilities must not override `InputPressed` / `InputReleased` or read the spec's `InputPressed`. `ReplicatedDataRoutesRefused` pins the spec-flag effect. |
+| `ServerCurrentMontageSetNextSectionName`, `ServerCurrentMontageJumpToSectionName`, `ServerCurrentMontageSetPlayRate` (`:1804`, `:1808`, `:1812`) | Open, by design. They act only on the ASC's own current montage, and only when the client names that same animation (`GAS/Private/AbilitySystemComponent_Abilities.cpp:3639`, `:3679`, `:3719`). | Presentation only. No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). The project plays no ability montage through the ASC yet (no `PlayMontage` use under `Source/`). |
+
+**Why the debug request is closed in every build.** The stock
+`ServerPrintDebug_Request_Implementation` runs `Debug_Internal` with
+`bPrintToLog`, so any client can make the server dump its ASC (granted
+abilities, attributes, effects) to the server log, store the result in the
+replicated `ServerDebugStrings`, and send the full dump back with a reliable
+client RPC (`GAS/Private/AbilitySystemComponent.cpp:2310-2325`). The
+`...WithStrings` variant also logs and stores a client-chosen string array in
+the replicated `ClientDebugStrings` (`:2292-2302`), which is unbounded client
+input. Both cost nothing against the activation bucket. The issue asked for
+closure in non-development builds. The override closes it unconditionally
+instead: a build-configuration split cannot be tested in the Editor
+(Development), and a Development dedicated server still faces real clients in
+the `development` environment. The loss is only the server half of
+`UAbilitySystemComponent::PrintDebug()` when project code calls it on a client
+(`GAS/Private/AbilitySystemComponent.cpp:2607-2636`); no such project code
+exists. `showdebug abilitysystem` is not affected: it runs `OnShowDebugInfo`,
+`DisplayDebug` and `Debug_Internal` locally with `bPrintToLog = false`
+(`GAS/Private/AbilitySystemComponent.cpp:2524-2590`). The only engine caller
+of `PrintDebug()` is the failed-activation threshold dump
+(`GAS/Private/AbilitySystemComponent_Abilities.cpp:2296-2310`), which the
+production ASC never reaches because `InternalServerTryActivateAbility`
+refuses without sending `ClientActivateAbilityFailed`. Nothing outside the GAS
+plugin reads the response. Server-side console debugging is unaffected. A
+later decision may re-enable it behind an explicit
+development-only gate; no new RPC is needed for that.
 
 **Blueprint exposure review (DoD2).** Attributes are `BlueprintReadOnly` with
 no setters. P3 exposes no project Blueprint entry point; the client-side
@@ -904,7 +1435,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T4 | `Aetheln.GameCombat.Lifecycle.AvatarReassignment` | P2 | H | Real `Possess` of pawn B after A: B is the avatar, no re-grant, no refill, no synthetic broadcasts |
 | T5 | `Aetheln.GameCombat.Lifecycle.AvatarDestroyedWhilePossessed` | P2 | H | Null case fires first; avatar null; PlayerState ASC intact; no crash |
 | T6 | `Aetheln.GameCombat.Lifecycle.AIPawnOwnsAbilitySystem` | P2 | H | AI ASC on the pawn, Minimal, owner and avatar the pawn; possession refreshes actor info; no PlayerState |
-| T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: all six attributes `COND_OwnerOnly` and `REPNOTIFY_Always` |
+| T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: `Health` and `MaxHealth` `COND_None`, the other four `COND_OwnerOnly`, all six `REPNOTIFY_Always` |
 | T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 (P4 adds the lower-only case) | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value and lowers a base above it; with a positive temporary modifier active, lowering a max below the current value but above the base re-clamps the current value and never raises the base |
 | T9 | `Aetheln.GameCombat.Attributes.InitOnceThroughEffect` | P2 | H | Values arrive only through the init effect, once per PlayerState; every current value equals its configured value; re-possession does not reapply |
 | T10 / A1 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3, #60 P2 update | H | Exactly seven reflected fields; only Aim and ClientServerTimeSeconds are added; no target, hit, contact, damage, magnitude, attribute, shape, range, window, cost, or cooldown field |
@@ -914,23 +1445,24 @@ matches the approved design; T32 is intentionally unassigned.
 | T14 | `Aetheln.GameCombat.ActivationSeam.RateBound` | P3 | H | With an injected clock and test-set bucket: excess requests get `RateLimited` with no side effect; refused stock-route calls draw from the same bucket; in-bound requests are unaffected. The bucket runs before validation: zero-sequence, malformed, and no-avatar requests each spend a token, and once the bucket is empty a malformed request gets `RateLimited`, not its validation reason |
 | T15 | `Aetheln.GameCombat.ActivationSeam.GrantValidationFailsClosed` | P3 | H | Grant refused for a class not deriving from `UAethelnGameplayAbility`, a null class, a client security policy, a predicted execution policy, per-execution instancing, a missing tag, an identity outside the `Ability.` family or the bare root, content version 0, a negative or non-finite cost or cooldown, `AbilityTriggers`, `bReplicateInputDirectly`, a spec input id, or spec-level `DynamicAbilityTriggers`. Each definition case first shows the unchanged definition is grantable, the exact refusal count is pinned, and end to end the PlayerState grants only the valid configured class |
 | T16 | `Aetheln.GameCombat.ActivationSeam.CheatFlagsOff` | P3 | H | `AbilitySystem.IgnoreCooldowns` and `IgnoreCosts` are off by default (cheat variables, `GAS/Private/AbilitySystemGlobals.cpp:39-40`); the seam ignores them |
-| T17 | `Aetheln.GameCombat.Abilities.CostAndCooldownCommit` | P4 | H | For each of the three skeletons, with test-set values on the granted instance: acceptance commits once through `CommitAbility`, applies one cost (Endurance drops by exactly the cost) and one cooldown effect that grants the ability's own cooldown tag for the set duration, and the activation ends itself without a cancel; a request during the cooldown gets `OnCooldown` and spends nothing; after the test removes the cooldown effect (no ticking), the next is accepted; one ability's cooldown never blocks another |
+| T17 | `Aetheln.GameCombat.Abilities.CostAndCooldownCommit` | P4, #260 P2 | H | For the fixture Instant Strike (the Parry joined it in #260 P3; the stances have no cooldown, so their cost-once and no-cooldown legs are K10's, not this test's), with test-set values on the granted instance, ending the strike at its `RecoveryEnd`: acceptance commits once through `CommitAbility`, applies one cost (Endurance drops by exactly the cost) and one cooldown effect that grants the ability's own cooldown tag for the set duration, and the activation ends itself without a cancel; a request during the cooldown gets `OnCooldown` and spends nothing; after the test removes the cooldown effect, the next is accepted; one ability's cooldown never blocks another; with the Parry beside the strike, an ability accepted while another is still on its own cooldown shows the independence |
 | T18 | `Aetheln.GameCombat.Abilities.ResourceBounds` | P4 | H | Endurance below cost gives `InsufficientResource`, no partial spend; a non-finite or negative cost fails closed the same way; cost equal to Endurance is accepted and leaves 0; a zero cost is accepted at 0 Endurance and applies no cost effect; content check: no configured cost exceeds the configured `MaxEndurance` |
-| T19 | `Aetheln.GameCombat.Abilities.TagAndStateGates` | P4 | H | For each skeleton, `State.Dead` and a test block give `ActivationBlocked` with nothing spent or committed, and removing either allows activation. Which abilities block which is `TBD` (#60, #18), so the test block uses the ASC's blocked-ability tags (`BlockAbilitiesWithTags` on the ability's identity), as an active blocking ability would, and puts no test tag on a production ability |
-| T20 | `Aetheln.GameCombat.Abilities.DefinitionsAndVersions` | P4 | H | `DefaultGame.ini` grants exactly the three skeletons, in order, and every definition passes grant validation; unique `Ability.` tags whose native tag comments are their semantic IDs, `ContentVersion >= 1` loaded from the ini, `InstancedPerActor` and ServerOnly policies (nothing predicted), exactly one unique cooldown tag, null effect classes, `bAcceptsRelease = false`; through the configured grant list, a newer or older content version gives `IncompatibleVersion` and the matching one is accepted |
+| T19 | `Aetheln.GameCombat.Abilities.TagAndStateGates` | P4, #260 P2 | H | For the fixture Instant Strike, `State.Dead` and a test block give `ActivationBlocked` with nothing spent or committed, and removing either allows activation. Which abilities block which is pinned in K3, so this test's block uses the ASC's blocked-ability tags (`BlockAbilitiesWithTags` on the ability's identity), as an active blocking ability would, and puts no test tag on a production ability |
+| T20 | `Aetheln.GameCombat.Abilities.DefinitionsAndVersions` | P4, #260 P2 | H | `DefaultGame.ini` grants none of the actives (unset values refuse the grant, except for the two stances, whose only value is the provisional duration: K10 and K13 cover them) and the fixture definition passes grant validation; unique `Ability.` tags whose native tag comments are their semantic IDs, `ContentVersion >= 1` loaded from the ini, `InstancedPerActor` and ServerOnly policies (nothing predicted), exactly one unique cooldown tag, null effect classes, `bAcceptsRelease = false`; through the fixture grant, a newer or older content version gives `IncompatibleVersion` and the matching one is accepted |
 | T21 | `Aetheln.GameCombat.Telemetry.ActivationOutcomes` | P3 | H | One event and one metric per ordinary outcome, matching the telemetry table; activation id empty on rejections, ability id only from step 6; a valid Release event carries the running activation id; public copy has no diagnostic code; zero-sequence rejections and refused stock-route calls are metric-only; a rate-limited flood gives one event and one outcome on entry and one aggregated metric on exit; a stock-route flood during a window folds into the suppressed count; teardown while limited flushes the exit metric. The test calls `SetRuntimeContext` itself (as `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:251` does), because `TryComposeCorrelation` drops every event without one (`Source/GameNet/Private/AethelnObservabilitySubsystem.cpp:149-152`). |
 | T22 | `Aetheln.Observability.Contracts.SchemaAndVocabulary` (update) | P3 | H | `RateLimited` is known, its string `rate-limited` is stable, the schema version is still 1 |
 | T23 | `Aetheln.GameCombat.Net.ClientAvatarConvergence` | P5 | P | On both clients the avatar is null before possession, equals the pawn after spawn and re-possession, and is null again after unpossession, including when the PlayerState arrives after the pawn |
-| T24 | `Aetheln.GameCombat.Net.AttributeReplication` | P5 | P | All six attributes reach the owner only, at the provisional frequency rather than 1 Hz |
+| T24 | `Aetheln.GameCombat.Net.AttributeReplication` | P5 | P | Health and MaxHealth reach every client and the other four attributes reach the owner only, at the provisional frequency rather than 1 Hz |
 | T25 | `Aetheln.GameCombat.Net.MixedEffectReplication` | P5 | P | The owner gets the full cooldown effect with time remaining; the other client sees only the tag |
 | T26 | `Aetheln.GameCombat.Net.OutcomeOwnerOnly` | P5 | P | The outcome reaches the owning client only, reliably |
 | T27 | `Aetheln.GameCombat.Net.ClientCannotActivateDirectly` | P5 | P | A client calling `TryActivateAbility` or the engine RPCs activates and commits nothing and gets no reply to amplify; client-side `CanActivateAbility` is false for every player ability |
 | T28 | `Aetheln.GameCombat.Net.ReliabilityMasksNetworkDuplication` | P5 | P | Under loss, duplication, and reordering profiles the reliable channel prevents double commits and both clients see the same cooldown state. Adversarial duplicates are T11 and T12. |
-| T29 | `Aetheln.GameCombat.Net.PredictedHoldTheLineRollback` | P6 only | P | Rejected prediction rolls back cost, cooldown, and tag; accepted converges with no double cost, including under loss |
+| T29 | `Aetheln.GameCombat.Net.PredictedActivationRollback` (planned as `PredictedHoldTheLineRollback`; the ability is open, Open Decisions 1) | P6 only | P | Rejected prediction rolls back cost, cooldown, and tag; accepted converges with no double cost, including under loss |
 | T30 | Packaged two-client run with the new seam | later | K | Not required to merge #19 |
 | T31 | `Aetheln.GameCombat.ActivationSeam.LifecycleRejections` | P3 | H | No avatar gives `ConnectionClosed`; a dying avatar gives `ActorDestroyed`; sequence state survives re-possession |
 | T33 | `Aetheln.GameCombat.Lifecycle.PawnToAbilitySystemLookup` | P2 | H | `FindForPawn` returns the PlayerState ASC for a player pawn, the pawn's own ASC for AI, null for neither |
-| T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2 | H | Pins the known gap: a fresh PlayerState for the same player gets a full init. #21 flips it. |
+| T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2, flipped by #21 P4 and P4b | H | After the production logout (the controller's destruction), a fresh PlayerState for the same player and key resumes the same pawn, takes the carried Health and cooldown, and is granted once. The name keeps the P2 gap it pinned; #21 P4 flipped it for a keyed reconnect, and P4b keeps the pawn and issues every client its key, which closes it for a client that keeps the key. |
+| T35 | `Aetheln.GameCombat.ActivationSeam.DebugRequestsRefused` | #324 | H | `ServerPrintDebug_Request` and `...WithStrings` write no server or client debug strings, send no outcome and each draw one bucket token (two-token bucket, no refill, then a seam request is `RateLimited`). Control: the engine implementations, called past the override, write both string arrays. |
 
 ### T1 required integration coverage
 
@@ -977,7 +1509,7 @@ leaves the spike files untouched.
 | **P3** Seam and telemetry | `AethelnActivationTypes.h`; in `AethelnAbilitySystemComponent.*`: the seam RPC, static validator, rate bucket, two stock-route overrides, seam scope and result slot, owner outcome, and telemetry; in `AethelnPlayerState.*`: grant validation; the base `AethelnGameplayAbility.*` with the choke point (cost and cooldown arrive in P4); `RateLimited` in `Source/GameNet/Public/AethelnObservability.h` and its test; T10 to T16, T21, T22, T31 with test-only abilities; the append-only rule in `docs/observability-and-crash-diagnostics.md`. | P2 |
 | **P4** Abilities | Cost and cooldown overrides on the base ability, the shared effects, the three skeletons (`AethelnOathscarAbilities.*`), the grant list and per-ability config, T17 to T20. | P3 |
 | **P5** Two-client evidence | Select the input-enabled pawn with `AAethelnCombatGameMode` by the config soft-class route in Class Layout, with the game mode chosen per launch by `?game=`. T23 to T28 as manual PIE steps recorded in the PR. Until #60 and #82 bind ability input, the non-shipping console commands `Aetheln.Combat.Request <AbilityId> [Press\|Release]` and `Aetheln.Combat.Direct` start an ability through the seam and call the stock client routes by hand, and the possession and outcome log lines show the result. This is also the feel test after which the owner answers whether #19 can close without P6. | P4 |
-| **P6** Predicted Hold the Line (gated) | Batching override, `ServerSubmitPredictedActivation`, the Hold the Line policy change, the grant-validation allowance, T29 under network emulation, and the TC-008 update. | P5 and the owner's decision |
+| **P6** Predicted activation (gated) | Batching override, `ServerSubmitPredictedActivation`, the policy change of the one approved ability (TC-008 named Hold the Line, dropped 2026-10-13), the grant-validation allowance, T29 under network emulation, and the TC-008 update. | P5 and the owner's decision, including which ability |
 
 Not part of #19: ability input bindings (they go with #60 and #82); damage and
 the defense order, contacts, Guard pressure, block resolution, the basic chain,
@@ -988,15 +1520,12 @@ the spike classes after #2 closes.
 
 ### Local automation evidence for P2 to P5
 
-CI compiles the new code but runs only a frozen filter of two tests,
-`Aetheln.Harness.ProjectAndModuleLoad` and
-`Aetheln.GameCombat.NetworkSpike.Authority`
-(`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`; harness contract
-`docs/unreal-automation.md:18-37`; receipt and aggregate pins
-`scripts/ci/New-CiAcceptanceReceipt.ps1:329-336`,
-`scripts/ci/Invoke-CiAcceptanceAggregate.ps1:610-617`,
-`docs/continuous-integration.md:513`). The new tests therefore do not run in
-CI. Under the repository rule to record manual test steps in the pull request
+When P2 to P5 were delivered, CI compiled the new code but ran only a frozen
+filter of two tests, `Aetheln.Harness.ProjectAndModuleLoad` and
+`Aetheln.GameCombat.NetworkSpike.Authority`. The new tests therefore did not
+run in CI until #237, which runs every declared `Aetheln.` test (see
+[Unreal Automation](unreal-automation.md)). Under the repository
+rule to record manual test steps in the pull request
 when automation is unavailable, each of P2 to P5 records, at its exact head on
 the pinned engine, the `Automation RunTests` command, the revision, and the
 pass counts:
@@ -1016,16 +1545,25 @@ here.
 
 ## Known Interim Gaps
 
-- **Reconnect is a free refill (owner: #21).** With the `AGameModeBase` base
-  class pinned in Class Layout, a reconnect creates a new PlayerState, so
-  `bCombatStateInitialized` is false and P2 applies the init effect again: the
-  player returns with full Health and Endurance and no cooldowns. Canon forbids this: "disconnect is never an instant escape,
-  cleanse, restore, or grant" (Death, Logout, and Recovery Safety in the combat
-  document). #19 adds no restoration code. The test
-  `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` pins the current behavior
-  so the gap stays visible, and #21 flips it when it lands its reconnect rule
-  (its acceptance criterion: reconnect during death or respawn resolves to one
-  valid state).
+- **Reconnect is a free refill (closed for a client that keeps its key, #21 P4
+  and P4b).** With the
+  `AGameModeBase` base class pinned in Class Layout, a reconnect creates a new
+  PlayerState, so `bCombatStateInitialized` is false. #21 P4 builds the
+  transfer and P4b keeps the player: a logout keeps the old PlayerState,
+  inactive and unowned, and its pawn in the world, attackable, for the disconnect grace
+  window under a server-issued key that the client presents, and the new
+  PlayerState resumes the pawn and takes the attributes, shared timed states,
+  life state and respawn wait in place of the initial attributes
+  ([Reconnect and Carried State](death-and-respawn.md#reconnect-and-carried-state-p4-and-p4b)).
+  Canon says "disconnect is never an instant escape, cleanse, restore, or grant"
+  (Death, Logout, and Recovery Safety in the combat document). That holds only
+  for a client that keeps its key. The client keeps it in memory only, so a
+  process crash, a restart, or an omitted or changed key starts a new session
+  at once: the same person returns refilled and cleansed of death, the respawn
+  wait, cooldowns and a Guard break. This is accepted under the key's exception
+  record and closes with #35 (authenticated accounts). The test
+  `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` keeps its name and asserts
+  the carried values and the resumed pawn through the production logout.
 - **Replicated-data cache closure (#60 P2).** All four client-callable cache
   writers now refuse through generated virtual implementations. A3 covers
   no writes, token accounting, metric-only telemetry, no replies, and
@@ -1037,8 +1575,9 @@ here.
 All stay `TBD` until the named owner decides.
 
 1. **Whether #19 can close without P6**, and so whether any ability is
-   predicted. Owner decision after P5, with an accepted architecture entry
-   (TC-008 is the candidate).
+   predicted, and which. Owner decision after P5, with an accepted
+   architecture entry (TC-008 is the candidate; it names Hold the Line, which
+   the owner dropped on 2026-10-13, so TC-008 needs updating).
 2. **Tuning values:** initial `MaxHealth`, `MaxEndurance`, and `MaxGuard`,
    starting current values, each ability's Endurance cost (or none), and each
    cooldown duration. Owners: Issue
@@ -1049,18 +1588,41 @@ All stay `TBD` until the named owner decides.
 4. **Numeric aim/time bounds** (#82 F1, F2). #60 P2 decides the schema-2
    representation, bounded correction and raw-to-raw rate policy. Its eight
    keys remain unset/`TBD`; owners #60, #2 and #45 approve future values.
-5. **Phase behavior of Hold the Line:** a fixed-duration commitment, or
-   hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
-   owner.
+5. **Phase behavior of Hold the Line:** superseded. The owner chose
+   hold-and-release on 2026-10-12, then dropped Hold the Line on 2026-10-13
+   ([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)).
 6. **Blocking and cancel relations** among the three actives, the basic chain,
    dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
-   Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
-   stay open.
-7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
-   including closing the reconnect gap. Owner: #21.
-8. **What opponents may see** of the six attributes. Owner: #61.
+   Q10 and Q17 (owner-approved 2026-10-10) answer it. For the representative
+   actives, Instant Strike's refusal inside the chain's commitment window is
+   decided (owner, 2026-10-13); the rest is open in
+   [Representative Oathscar Actives](#open-decisions-for-the-representative-actives).
+7. **Cooldown and attribute behavior across reconnect**, including closing the
+   reconnect gap. Owner: #21 (P4). Decided for respawn (owner, 2026-10-12,
+   issue #21): full Health, Endurance, and Guard, with cooldowns kept
+   counting. Delivered for reconnect in #21 P4: the carried state keeps the
+   attributes and the shared timed states counting on the server clock.
+8. **What opponents may see** of the six attributes. Resolved by the owner on
+   #61 (2026-10-12, [comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): Health and MaxHealth are visible to
+   everyone; Endurance, Guard, and their maxima stay owner-only. The visual
+   language, cue timing, and localization of that view stay `TBD` until the
+   UI pass after the P5 feel test (#61).
 9. **Content version in the observability correlation fields.** Owner: #38,
    when #60 needs it.
 10. **Final display names** of the abilities, resources, and the Order.
-11. **Widening the CI automation filter** for the new test groups. A later
-    ticket under #85 and #167.
+    Instant Strike, Parry, Attack Stance, and Defense Stance are working
+    names.
+11. **Widening the CI automation filter** for the new test groups. Resolved by
+    #237: CI runs every declared `Aetheln.` test.
+12. **Resource recovery (#292).** Values: each resource's rate, period, and
+    delay (#107; the period also costs replication, #45). Policy defaults the
+    owner may change: whether blocking pauses Guard recovery, whether
+    `State.GuardBroken` pauses it, whether recovery runs with no avatar,
+    whether death removes a running delay (#21), whether opponents may see the
+    delay tags (#61), recovery for AI (#20), and the per-resource content
+    version (#106). Technical questions: the same-timestamp order of
+    recovery steps, delay ends, and contacts, which canon says the combat
+    timeline declares (#60, #45; see Same-timestamp order in
+    [Resource Recovery](#resource-recovery)), and the lower bound for the
+    period, since any positive value is accepted today (#107, #45; no number
+    is set).

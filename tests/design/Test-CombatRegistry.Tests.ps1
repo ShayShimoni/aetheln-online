@@ -11,6 +11,7 @@ $FixturePath = Join-Path ([IO.Path]::GetTempPath()) ("AethelnCombatRegistry-{0}.
 $SchemaFixturePath = Join-Path ([IO.Path]::GetTempPath()) ("AethelnCombatSchema-{0}.json" -f [guid]::NewGuid().ToString('N'))
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("AethelnCombatKinds-{0}" -f [guid]::NewGuid().ToString('N'))
 . $Validator -SkipMain
+. (Join-Path $Root 'scripts/design/Test-CombatTagMapping.ps1') -SkipMain
 
 function Copy-Fixture {
 	return (Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json)
@@ -61,6 +62,22 @@ function Get-EmittedCompositionFixture {
 	return $Fixture
 }
 
+function Assert-TagMapping {
+	param([string] $Name, [string] $Source, [hashtable] $Pending = @{}, [string] $Reason)
+	$Directory = Join-Path $FixtureRoot ("tags-{0}" -f [guid]::NewGuid().ToString('N'))
+	[void](New-Item -ItemType Directory -Path $Directory -Force)
+	[IO.File]::WriteAllText((Join-Path $Directory 'Tags.cpp'), $Source, (New-Object System.Text.UTF8Encoding($false)))
+	$Result = Test-CombatTagMapping -SourceRoot $Directory -RegistryPath $RegistryPath -Pending $Pending
+	if ($Reason) {
+		if ($Result.passed -or -not (@($Result.errors) -match $Reason)) { throw "Expected tag mapping $Name to fail with '$Reason'; actual: $($Result.errors -join '; ')" }
+		Write-Output "PASS: rejected tag mapping $Name"
+	}
+	else {
+		if (-not $Result.passed) { throw "Expected valid tag mapping ${Name}: $($Result.errors -join '; ')" }
+		Write-Output "PASS: tag mapping $Name"
+	}
+}
+
 function Invoke-Fixture {
 	param($Fixture, [string] $UseSchemaPath = $SchemaPath)
 	[IO.File]::WriteAllText($FixturePath, ($Fixture | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
@@ -98,22 +115,31 @@ try {
 	$CanonicalGrammarText = Get-Content -LiteralPath (Join-Path $Root 'docs/game-design-bible.md') -Raw -Encoding UTF8
 	$CanonicalIds = @([regex]::Matches($CanonicalOrderText, 'order\.oathscar(?:\.[a-z][a-z0-9_]*)*') | ForEach-Object { $_.Value } | Sort-Object -Unique) +
 		@([regex]::Matches($CanonicalGrammarText, 'combat\.(?:resource|damage)\.[a-z][a-z0-9_]*') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+	# Issue #260 (owner, 2026-10-13): canon lists these retired Skein IDs by name;
+	# with no same-kind replacement they cannot be Superseded records, so they stay absent.
+	$RetiredIds = @('order.oathscar.form.gate_step.advancing_answer', 'order.oathscar.form.gate_step.rooted_answer',
+		'order.oathscar.form.hold_the_line.closed_oath', 'order.oathscar.thread.unbroken_sequence', 'order.oathscar.thread.ground_reclaimed')
 	$Seed = Copy-Fixture
 	$SeedIds = @($Seed.definitions | ForEach-Object { $_.id } | Sort-Object -Unique)
-	$MissingOrExtra = @(Compare-Object -ReferenceObject $CanonicalIds -DifferenceObject $SeedIds -CaseSensitive)
-	if ($CanonicalIds.Count -ne 29 -or $Seed.definitions.Count -ne 29 -or $MissingOrExtra.Count -gt 0 -or
-		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Canonical Intent' }).Count -ne 20 -or
-		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Prototype Candidate' }).Count -ne 9 -or
-		@($Seed.budgets | Where-Object { $_.maxPerRoot -cne 'TBD' }).Count -gt 0) {
-		throw "Expected exactly 29 source-bound shared/Oathscar records, nine prototype candidates, and unresolved budgets: $($MissingOrExtra | Out-String)"
+	foreach ($RetiredId in $RetiredIds) {
+		if ($CanonicalIds -cnotcontains $RetiredId -or $SeedIds -ccontains $RetiredId) { throw "Retired ID $RetiredId must be listed in canon and absent from the registry." }
 	}
-	Write-Output 'PASS: all 29 merged shared/Oathscar IDs, nine prototype candidates, and TBD budgets match the seed'
+	$CanonicalIds = @($CanonicalIds | Where-Object { $RetiredIds -cnotcontains $_ })
+	$MissingOrExtra = @(Compare-Object -ReferenceObject $CanonicalIds -DifferenceObject $SeedIds -CaseSensitive)
+	if ($CanonicalIds.Count -ne 28 -or $Seed.definitions.Count -ne 28 -or $MissingOrExtra.Count -gt 0 -or
+		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Canonical Intent' }).Count -ne 15 -or
+		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Prototype Candidate' }).Count -ne 10 -or
+		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Superseded' }).Count -ne 3 -or
+		@($Seed.budgets | Where-Object { $_.maxPerRoot -cne 'TBD' }).Count -gt 0) {
+		throw "Expected exactly 28 source-bound shared/Oathscar records, ten prototype candidates, three superseded actives, and unresolved budgets: $($MissingOrExtra | Out-String)"
+	}
+	Write-Output 'PASS: all 28 merged shared/Oathscar IDs, ten prototype candidates, three superseded actives, and TBD budgets match the seed'
 	$Schema = Get-Content -LiteralPath $SchemaPath -Raw -Encoding UTF8 | ConvertFrom-Json
 	$AllKinds = Copy-Fixture
 	foreach ($Kind in $Schema.kinds) {
 		$KindReferences = @()
 		if ($Kind -in @('specialization','weapon','peak')) { $KindReferences = @([pscustomobject]@{id='order.oathscar';minVersion=1;maxVersion=1}) }
-		elseif ($Kind -in @('form','thread')) { $KindReferences = @([pscustomobject]@{id='order.oathscar.ability.gate_step';minVersion=1;maxVersion=1}) }
+		elseif ($Kind -in @('form','thread')) { $KindReferences = @([pscustomobject]@{id='order.oathscar.ability.instant_strike';minVersion=1;maxVersion=1}) }
 		elseif ($Kind -eq 'keystone') { $KindReferences = @([pscustomobject]@{id='combat.resource.guard';minVersion=1;maxVersion=1}) }
 		$AllKinds.definitions += [pscustomobject]@{
 			id = "fixture.kind.$($Kind.ToLowerInvariant())"; kind = $Kind; definitionVersion = 1
@@ -280,7 +306,7 @@ try {
 	$ExpandedSchema.prototypeCandidateIds += 'order.oathscar'
 	[IO.File]::WriteAllText($SchemaFixturePath, ($ExpandedSchema | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
 	$Fixture = Copy-Fixture; $Fixture.definitions[8].maturity = 'Prototype Candidate'
-	Assert-Invalid -Name 'schema-expanded prototype promotion' -Fixture $Fixture -Reason 'prototype allowlist differs from the approved nine IDs' -UseSchemaPath $SchemaFixturePath
+	Assert-Invalid -Name 'schema-expanded prototype promotion' -Fixture $Fixture -Reason 'prototype allowlist differs from the approved ten IDs' -UseSchemaPath $SchemaFixturePath
 	$ExpandedSchema = Get-Content -LiteralPath $SchemaPath -Raw -Encoding UTF8 | ConvertFrom-Json
 	$ExpandedSchema.referenceKindPolicy = 'all-of'
 	[IO.File]::WriteAllText($SchemaFixturePath, ($ExpandedSchema | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
@@ -326,8 +352,8 @@ try {
 	$Fixture = Copy-Fixture; $Fixture.definitions[9].references[0].minVersion = 2
 	Assert-Invalid -Name 'incompatible definition version' -Fixture $Fixture -Reason 'incompatible version'
 	$Fixture = Copy-Fixture
-	@($Fixture.definitions | Where-Object { $_.id -ceq 'order.oathscar.ability.sworn_rebuke' })[0].definitionVersion = 2
-	Assert-Invalid -Name 'Unbroken Sequence modified Sworn Rebuke version drift' -Fixture $Fixture -Reason 'definition order\.oathscar\.thread\.unbroken_sequence: incompatible version of order\.oathscar\.ability\.sworn_rebuke'
+	@($Fixture.definitions | Where-Object { $_.id -ceq 'order.oathscar.ability.parry' })[0].definitionVersion = 2
+	Assert-Invalid -Name 'Witnessed Reprisal modified Parry version drift' -Fixture $Fixture -Reason 'definition order\.oathscar\.thread\.witnessed_reprisal: incompatible version of order\.oathscar\.ability\.parry'
 	foreach ($Pair in $ThreadTargetPairs) {
 		$Fixture = $ThreadTargetFixture | ConvertTo-Json -Depth 100 | ConvertFrom-Json
 		$Thread = @($Fixture.definitions | Where-Object { $_.id -ceq $Pair.threadId })[0]
@@ -341,9 +367,9 @@ try {
 	}
 	$Fixture = Copy-Fixture; $Fixture.definitions[9].references = @()
 	Assert-Invalid -Name 'specialization without Order reference' -Fixture $Fixture -Reason 'missing required kind reference'
-	$Fixture = Copy-Fixture; $Fixture.definitions[21].references = @()
-	Assert-Invalid -Name 'Form without ability reference' -Fixture $Fixture -Reason 'missing required kind reference'
-	$Fixture = Copy-Fixture; $Fixture.definitions[28].references[0].id = 'combat.damage.wrought'
+	$Fixture = $AllKinds | ConvertTo-Json -Depth 100 | ConvertFrom-Json; @($Fixture.definitions | Where-Object { $_.id -ceq 'fixture.kind.form' })[0].references = @()
+	Assert-Invalid -Name 'Form without ability reference' -Fixture $Fixture -Reason 'missing required kind reference' -UseSchemaPath $KindsSchemaPath
+	$Fixture = Copy-Fixture; $Fixture.definitions[27].references[0].id = 'combat.damage.wrought'
 	Assert-Invalid -Name 'Keystone without any accepted reference kind' -Fixture $Fixture -Reason 'missing required kind reference'
 	Assert-Valid -Name 'Keystone any-of accepts one resource reference' -Fixture $AllKinds -UseSchemaPath $KindsSchemaPath
 	$Fixture = Copy-Fixture; $Fixture.definitions[8].references += [pscustomobject]@{id='order.oathscar.spec.ironwake';minVersion=1;maxVersion=1}
@@ -373,23 +399,23 @@ try {
 	$Fixture = Copy-Fixture
 	foreach ($Budget in $Fixture.budgets) { $Budget.maxPerRoot = 2 }
 	$Fixture.definitions[9] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=1;procs=1;targets=0;constructs=0})
-	$Fixture.definitions[9].emits += 'order.oathscar.ability.gate_step'
-	$Fixture.definitions[18] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=2;procs=0;targets=0;constructs=0})
+	$Fixture.definitions[9].emits += 'order.oathscar.ability.instant_strike'
+	$Fixture.definitions[21] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=2;procs=0;targets=0;constructs=0})
 	Assert-Invalid -Name 'aggregate descendant fan-out' -Fixture $Fixture -Reason 'aggregate listeners work exceeds root budget'
 	$Fixture = Copy-Fixture
 	foreach ($Budget in $Fixture.budgets) { $Budget.maxPerRoot = 4 }
 	$Fixture.definitions[9] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=1;procs=1;targets=0;constructs=0})
-	$Fixture.definitions[9].emits += 'order.oathscar.ability.gate_step'
-	$Fixture.definitions[18] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=1;constructs=0})
+	$Fixture.definitions[9].emits += 'order.oathscar.ability.instant_strike'
+	$Fixture.definitions[21] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=1;constructs=0})
 	Assert-Valid -Name 'finite acyclic proc work' -Fixture $Fixture
-	$Fixture.definitions[18].emits += 'order.oathscar.spec.ironwake'
-	$Fixture.definitions[18].work.listeners = 1; $Fixture.definitions[18].work.procs = 1
+	$Fixture.definitions[21].emits += 'order.oathscar.spec.ironwake'
+	$Fixture.definitions[21].work.listeners = 1; $Fixture.definitions[21].work.procs = 1
 	Assert-Invalid -Name 'proc cycle' -Fixture $Fixture -Reason 'cycle:'
 	$Fixture = Copy-Fixture
 	foreach ($Budget in $Fixture.budgets) { $Budget.maxPerRoot = [long]::MaxValue }
 	$Fixture.definitions[9] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=1;procs=1;targets=[long]::MaxValue;constructs=0})
-	$Fixture.definitions[9].emits += 'order.oathscar.ability.gate_step'
-	$Fixture.definitions[18] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=[long]::MaxValue;constructs=0})
+	$Fixture.definitions[9].emits += 'order.oathscar.ability.instant_strike'
+	$Fixture.definitions[21] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=[long]::MaxValue;constructs=0})
 	Assert-Invalid -Name 'wide integer aggregate overflow' -Fixture $Fixture -Reason 'aggregate targets work exceeds root budget'
 	$CompositionFixture = Get-CompositionFixture
 	Assert-Valid -Name 'two-listener composition within aggregate limits' -Fixture $CompositionFixture -UseSchemaPath $KindsSchemaPath
@@ -429,6 +455,33 @@ try {
 	Assert-Invalid -Name 'string registry version' -Fixture $Fixture -Reason 'incompatible schema identity or version'
 	$Fixture = Copy-Fixture; $Fixture.definitions[0] | Add-Member -NotePropertyName accidental -NotePropertyValue 'drift'
 	Assert-Invalid -Name 'unknown definition property' -Fixture $Fixture -Reason 'unexpected accidental'
+
+	# #84 P3b: every native Ability. tag maps to exactly one registry ID.
+	$RealTags = Test-CombatTagMapping -SourceRoot (Join-Path $Root 'Source') -RegistryPath $RegistryPath
+	if (-not $RealTags.passed) { throw "Expected the repository tags to map: $($RealTags.errors -join '; ')" }
+	Write-Output 'PASS: repository native Ability. tags map to the registry'
+	# The pending list is pinned: adding an entry needs a reviewed change here (D5, owners #18 and #83).
+	$PinnedPending = 'Ability.Block,Ability.Dodge,Ability.Enemy.Greybox.Strike'
+	if ((@($PendingRegistryIds.Keys | Sort-Object) -join ',') -cne $PinnedPending) { throw "The pending registry ID list changed; update `$PinnedPending in this file: $(@($PendingRegistryIds.Keys | Sort-Object) -join ',')" }
+	Write-Output 'PASS: pending registry ID list is pinned'
+	$Mapped = 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.InstantStrike", "order.oathscar.ability.instant_strike");'
+	Assert-TagMapping -Name 'one tag, one registry ID' -Source $Mapped
+	Assert-TagMapping -Name 'a non-Ability tag is not checked' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_A, "State.Unmapped", "no id");')
+	Assert-TagMapping -Name 'a test-only Ability.Test. tag is exempt' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_T, "Ability.Test.Probe", "Test-only identity of a probe");')
+	Assert-TagMapping -Name 'an ID outside the registry' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.Nope", "order.oathscar.ability.nope");' -Reason 'not a registry definition ID'
+	Assert-TagMapping -Name 'a tag with no comment' -Source 'UE_DEFINE_GAMEPLAY_TAG(Ability_A, "Ability.Oathscar.Bare");' -Reason 'does not start with a registry semantic ID'
+	Assert-TagMapping -Name 'a comment that is not an ID' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.Prose", "Some free text");' -Reason 'does not start with a registry semantic ID'
+	Assert-TagMapping -Name 'Test-only outside Ability.Test. is not exempt' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.Sneaky", "Test-only identity");' -Reason 'does not start with a registry semantic ID'
+	Assert-TagMapping -Name 'two tags for one ID' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_B, "Ability.Oathscar.Twin", "order.oathscar.ability.instant_strike");') -Reason 'already mapped by'
+	Assert-TagMapping -Name 'a tag declared twice' -Source ($Mapped + "`n" + $Mapped) -Reason 'declared more than once'
+	$PendingSource = 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_P, "Ability.Pending", "pending.fixture.id (later)");'
+	Assert-TagMapping -Name 'a pending tag whose ID is not in the registry yet' -Source $PendingSource -Pending @{ 'Ability.Pending' = 'pending.fixture.id' }
+	Assert-TagMapping -Name 'an unlisted tag with an unregistered ID' -Source $PendingSource -Reason 'not a registry definition ID'
+	Assert-TagMapping -Name 'a pending ID that differs from the declaration' -Source $PendingSource -Pending @{ 'Ability.Pending' = 'pending.other.id' } -Reason 'differs from the declared ID'
+	Assert-TagMapping -Name 'a stale pending entry whose ID reached the registry' -Source $Mapped -Pending @{ 'Ability.Oathscar.InstantStrike' = 'order.oathscar.ability.instant_strike' } -Reason 'remove the tag from the pending list'
+	Assert-TagMapping -Name 'a declaration in a shape the check cannot read' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, TEXT("Ability.Oathscar.Odd"), "order.oathscar.ability.instant_strike");' -Reason 'not in the shape the check reads'
+	Assert-TagMapping -Name 'a declaration followed by an unrelated Ability. string' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG(State_A, kName);' + "`n" + 'Foo("Ability.Q");')
+	Assert-TagMapping -Name 'a pending entry for a tag that is gone' -Source $Mapped -Pending @{ 'Ability.Gone' = 'gone.fixture.id' } -Reason 'no longer declared'
 }
 finally {
 	if (Test-Path -LiteralPath $FixturePath) { Remove-Item -LiteralPath $FixturePath -Force }

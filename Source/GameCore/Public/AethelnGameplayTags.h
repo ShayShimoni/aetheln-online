@@ -11,15 +11,26 @@
  */
 namespace AethelnGameplayTags
 {
-	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_GateStep);
-	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_SwornRebuke);
-	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_HoldTheLine);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_InstantStrike);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_SwordShieldBasicChain);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_SwordShieldBasicChain);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_InstantStrike);
 
-	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_GateStep);
-	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_SwornRebuke);
-	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_HoldTheLine);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_InstantStrike);
+
+	// #260 Parry: its identity, window state and cooldown, and the stagger it causes.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_Parry);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_Parrying);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_Parry);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Staggered);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stagger_Duration);
+
+	// #260 stances: each ability's identity, its exclusive state tag, and the shared duration. The stances have no cooldown tag.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_AttackStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_DefenseStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_AttackStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_DefenseStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stance_Duration);
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Dead);
 
@@ -36,6 +47,8 @@ namespace AethelnGameplayTags
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Blocking);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_GuardBroken);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Pressure_Guard);
+	// #83 prototype enemy attack, enemy.greybox.ability.strike (working name): enemy-scoped IDs map to <Family>.Enemy.<Enemy>.<Name>.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Enemy_Greybox_Strike);
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Init_MaxHealth);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Init_Health);
@@ -46,6 +59,12 @@ namespace AethelnGameplayTags
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Cooldown_Duration);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Cost_Endurance);
+
+	// #292 passive and delayed resource recovery.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_EnduranceRecoveryDelayed);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_GuardRecoveryDelayed);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Recovery_Amount);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Recovery_Delay);
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -58,6 +77,7 @@ namespace AethelnGameplayTags
 namespace AethelnCombatTestTags
 {
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_LongRunning);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_CostCommit);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Probe);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Triggered);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_Trigger);

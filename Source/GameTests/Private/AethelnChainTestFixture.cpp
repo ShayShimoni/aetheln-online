@@ -6,28 +6,6 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/WorldSettings.h"
 
-UAethelnChainTestAbility::UAethelnChainTestAbility()
-{
-	ContentVersion = 1;
-	ProvisionalEnduranceCost = 2.0f;
-	ProvisionalMaxSampleDistance = 10.0;
-	ProvisionalMaxSampleAngleDegrees = 5.0;
-	for (int32 Index = 0; Index < 3; ++Index)
-	{
-		FAethelnAttackStepDefinition& Step = ProvisionalSteps.AddDefaulted_GetRef();
-		Step.ActiveStart = 0.125; Step.ActiveEnd = 0.25;
-		Step.BufferOpen = Index == 2 ? 0.625 : 0.375;
-		Step.LinkOpen = Index == 2 ? 0.0 : 0.5;
-		Step.LinkClose = Index == 2 ? 0.0 : 0.75;
-		Step.RecoveryEnd = 0.625; Step.CancelOpen = 0.5;
-		Step.MaxAimPitchDegrees = 45.0;
-		Step.ShapeExtent = FVector(10.0);
-		Step.PathEnd.SetTranslation(FVector(30.0, 0.0, 0.0));
-		Step.WroughtDamage = 5.0f;
-		Step.MaxTargets = 4;
-	}
-}
-
 UAethelnCommitmentProbeTestAbility::UAethelnCommitmentProbeTestAbility()
 {
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
@@ -62,9 +40,11 @@ namespace AethelnChainTests
 		return Result;
 	}
 
-	bool FFixture::Init(FAutomationTestBase& Test)
+	bool FFixture::Init(FAutomationTestBase& Test, const TArray<TSubclassOf<UGameplayAbility>>& Extra)
 	{
-		if (!AethelnCombatTests::SpawnTestPlayer(Test, World, Player, { UAethelnChainTestAbility::StaticClass() })) { return false; }
+		TArray<TSubclassOf<UGameplayAbility>> Abilities = { UAethelnChainTestAbility::StaticClass() };
+		Abilities.Append(Extra);
+		if (!AethelnCombatTests::SpawnTestPlayer(Test, World, Player, Abilities)) { return false; }
 		Pawn = World.Spawn<AAethelnPlayerCharacter>();
 		if (!Test.TestNotNull(TEXT("Chain pawn exists"), Pawn)) { return false; }
 		Player.Controller->Possess(Pawn);

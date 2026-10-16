@@ -315,13 +315,16 @@ The 2026-10-10 redesign replaces the former dream-veiled identity with embodied
 spirit creatures who follow the Light's guidance. This is a revision of the
 people's canonical history, not a recent transformation caused by the Duskbreak.
 
-Use the retained [selected male](art-style-references/vesh-male-selected-2026-10-10.png)
-and [current female](art-style-references/vesh-female-current-2026-10-10.png)
-for this visual direction. The [results record](art-style-references/character-results-2026-10-10.md)
-preserves their exact prompts and separate selection states; final female
-visual approval remains pending. Written lore does not silently approve a
-production model or every visual option. Earlier Vesh studies and their
-back-veil requirements are superseded for new work.
+On 2026-10-13 the user adopted the creature exploration as the Vesh race
+baseline: [male v36](art-style-references/vesh-male-approved-2026-10-13.png)
+and [female v37](art-style-references/vesh-female-approved-2026-10-13.png).
+The female is the image attached to that selection, with the swept white mane
+and longer nape. The [approval record](art-style-references/vesh-approved-design-2026-10-13.md)
+preserves the chosen pair, exact prompts, hashes, and regeneration guidance.
+Both are approved visual references; production validation remains separate.
+They supersede the mouthless, solid-footed 2026-10-10 pair and earlier back-veil
+studies. Their adoption retains the embodied-spirit origin and Light-guided
+culture below; it is not a transformation event in the world's history.
 
 ### Origin and Embodied Life
 
@@ -353,45 +356,55 @@ witnessed record used by the Emberbound's shared restoration rules.
 
 ### Identity and Anatomy
 
-The selected design has a fit humanoid silhouette with clearly nonhuman
-extremities and a natural geometric face. Its required visual anatomy includes:
+The selected design has an athletic, recognizably humanoid creature silhouette,
+a modest forward shoulder set, a visible neck, and a natural geometric face.
+Keep the upper back compact enough to accommodate armor rather than enlarging
+it into a pronounced hump. Its required visual anatomy includes:
 
 - an obsidian-black short velvety coat with clean white markings;
 - white throat, paired upper-chest fields divided by a dark central V, outer
   shoulder and arm markings, forearm tufts, flanks, outer thighs, and calves;
   the central abdomen remains dark;
-- an ivory-gray faceted face grown as part of the body, with a softened tapered
-  lower contour and no visible human face beneath it;
+- an ivory-gray rigid face grown as part of the body, with broad clean facets,
+  dark lateral cheeks, a tapered chin, and no human face beneath it;
 - two narrow golden-yellow luminous eyes, with no visible human eye whites;
-- no visible mouth, nose, mouth seam, or required neck vents;
-- white hair, with short spiky male and long gathered female hair in the
-  retained pair; these examples do not prescribe every hairstyle;
-- hands with two elongated fingers and one opposable thumb; and
-- solid, softly tapered grounded feet without individual toes or split hooves.
+- a restrained, nearly horizontal dark mouth opening with softly rounded ends
+  and a neutral resting expression; no visible teeth, human lips, nose, or muzzle;
+- white creature hair in compact sculpted clumps: a short spiky male mane and
+  a swept female mane extending farther down the nape, with the neck visible;
+  these examples do not prescribe every hairstyle;
+- clawed hands with two elongated fingers and one opposable thumb; and
+- digitigrade legs with raised hocks and three-toed clawed paws.
 
 The face is biological identity rather than a removable mask or equipment.
 Its planes may vary within the same design family; eye angle, brow, cheeks,
-and jaw remain readable without introducing human facial openings. Speech
-resonates through the body and face. Eye expression, head inclination, posture,
-gesture, and a broad range of subtly harmonic voices carry emotion.
+and jaw retain the rigid face's identity around the creature mouth. Speech
+retains its subtly harmonic resonance through the body and face. Mouth movement,
+eye expression, head inclination, posture, and gesture carry expression.
+Preserve the rigid facial planes when animating the mouth; detailed jaw
+deformation and physiology remain TBD rather than implying a human face
+beneath the surface.
 
 White markings are fur pigment, not glowing veins or separate luminous organs.
-Keep emission localized to the golden eyes. Fur remains short and sculpturally
-simple, with restrained longer tufts at the existing forearm and calf accents.
+Keep emission localized to the golden eyes. The dark coat remains close and
+smooth; white markings form broad, overlapping sculpted fur clumps, with longer
+accents around the head, shoulders, forearms, outer thighs, and calves. Keep
+detail restrained and readable as fur rather than feathers, scales, or armor.
 There are no biological wings, back-veils, horns, tails, muzzles, or animal ears.
 The [art guide](art-style-guide.md) governs the polished 3D finish.
 
 ### Sex, Age, and Variation
 
-The retained male uses a lean athletic masculine build, broader shoulders and
-chest, and a stronger facial contour. The current female uses a slim athletic
+The approved male uses an athletic masculine build, broader shoulders and
+chest, and a stronger facial contour. The approved female uses a slim athletic
 feminine build, gentler waist-to-hip transitions, a softer jaw and cheek contour,
-and balanced smaller-looking hands and feet. Both remain inside the shared
+and balanced smaller-looking hands and paws. Both must fit the shared
 visual scale, limb-reach bounds, combat envelope, and broad body-preset range.
 
-Both sexes retain the same face material, golden eyes, short coat, white
-marking language, and hand/foot topology. Hair, face, body, voice, and marking
-presets provide individual variation; exact supported choices remain TBD.
+Both sexes retain the same face material, creature mouth, golden eyes, short
+coat, white marking language, clawed hand topology, and digitigrade paws.
+Hair, face, body, voice, and marking presets provide individual variation;
+exact supported choices remain TBD.
 
 Vesh live moderately longer than Aurin without approaching Kell longevity.
 Exact years remain TBD. Age appears through changes in hair and coat texture,
@@ -439,8 +452,8 @@ Light while disputing the other's method. Neither faction owns its guidance.
 - **Heritage palette:** obsidian, white, ivory, and small lantern-gold accents.
 - **Clothing silhouette:** light layered robes, fitted traveling clothes,
   supple wraps, and shaped armor that frame the face and accommodate hair and
-  fur. The modeling clothes in the retained female image are not heritage
-  uniform or a mandatory cosmetic.
+  fur, clawed hands, and digitigrade legs. The approved pair are unarmored
+  anatomy references with opaque fur coverage, not heritage uniforms.
 
 Vesh heritage names remain soft and echoing. Nhalen and Saeril favor breathy
 openings, liquid consonants, and paired vowels. Chosen titles remember an act,
@@ -555,10 +568,12 @@ different combat surface.
 - Shoulder, chest, and collar pieces fit Kell plate contours and neck movement.
 - Gauntlets and boots accommodate Kell claws, thumb articulation, and
   three-toed feet while preserving shared grips and foot placement.
-- Vesh gauntlets fit two fingers and a thumb, and boots fit their solid tapered
-  feet, while preserving shared grip sockets and ground contact.
+- Vesh gauntlets fit two clawed fingers and a thumb. Boots fit the digitigrade
+  lower leg and enclose the three-toed paw without deleting toes or claws.
+  Preserve shared grip sockets, foot placement, and ground contact.
 - Vesh collars, cloaks, and back equipment accommodate coat and hair volume;
-  no back-veil accommodation is required by the revised anatomy.
+  preserve the visible neck and modest forward shoulder set. No back-veil
+  accommodation is required by the revised anatomy.
 - Biological structures never retract, disappear, or become armor to solve
   equipment fitting.
 - Cultural appearances are wearable by every people through fitted variants.
@@ -615,8 +630,11 @@ A playable-people concept is not approved for production until review includes:
 - horn, ear, plate, claw, fur, natural-face, hair, and cloth clipping checks in
   locomotion and combat;
 - facial expression, eye behavior, voice presentation, and facial-rig checks
-  across every face preset; use mouth visemes where the anatomy supports them,
-  and eye, head, and voice expression for Vesh without opening a human mouth;
+  across every face preset; use mouth visemes where the anatomy supports them.
+  Vesh mouth motion must preserve the rigid natural face and creature opening
+  without adding human lips, a nose, or visible teeth;
+- Vesh digitigrade locomotion, clawed grips, enclosed boots, and ground contact
+  inside the shared skeleton, reach, root-motion, and contact-timing contract;
 - low-light and high-exposure checks for Vesh eye light, fur contrast, and Kell
   crystal surfaces, inner radiance, and glowing eyes;
 - LOD checks that preserve identity without changing combat readability; and

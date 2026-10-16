@@ -174,6 +174,7 @@ private:
 	friend class FAethelnMovementNetAimTrackingReplayTest;
 	friend class FAethelnMovementNetAirborneFacingBoundedTest;
 	friend class FAethelnMovementNetAirborneFacingReplayTest;
+	friend class FAethelnTwoClientMovementTest;
 	friend struct FAethelnMovementNetPredictionPair;
 	friend struct FAethelnMovementNetJumpReplayScenario;
 

@@ -16,6 +16,9 @@ UAethelnBlockAbility::UAethelnBlockAbility()
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Dodging);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+	// #260 (default, open): a Parry window also blocks the raise (one defense slot per ASC), and a committed Instant Strike.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_Parrying);
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_InstantStrike);
 	// No authored version, raise, arc, break, cost or cooldown preset: unset production config fails grant.
 }
 
@@ -102,6 +105,8 @@ EAethelnBlockConsequence UAethelnBlockAbility::HandleBlockedHit(const FAethelnBl
 		{
 			Pressure.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Pressure_Guard, -Contact.GuardPressure);
 			Source->ApplyGameplayEffectSpecToTarget(*Pressure.Data.Get(), ASC);
+			// Pressure, including a breaking one, restarts the defender's Guard recovery delay (#292).
+			UAethelnResourceRecoveryEffect::RestartDelay(*ASC, UAethelnGuardRecoveryEffect::StaticClass());
 		}
 	}
 	if (ASC->GetNumericAttribute(UAethelnCombatAttributeSet::GetGuardAttribute()) > 0.0f) { return EAethelnBlockConsequence::Blocked; }

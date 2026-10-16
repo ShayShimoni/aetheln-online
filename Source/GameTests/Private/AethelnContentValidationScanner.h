@@ -5,6 +5,8 @@
 
 class FJsonObject;
 class IAssetRegistry;
+class USkeletalMesh;
+class UTexture;
 
 /** Exact lowercase SHA-256 text check, defined once so a unity build cannot see two copies. */
 inline bool IsLowerSha256(const FString& Value)
@@ -75,8 +77,18 @@ struct FAethelnObservedPackage
 	TArray<FString> EditorOnlyDependencies;
 	/** Live-scan failures for runtime (Game) dependencies whose target is editor-only content. */
 	TArray<FString> EditorOnlyRuntimeDependencyFailures;
+	/** Runtime (Game) dependencies of a UBlueprint-class package on UncookedOnly-only script packages; recorded, not failed. */
+	TArray<FString> RecordedUncookedOnlyDependencies;
 	FString ContentSha256;
 	bool bRedirector = false;
+};
+
+/** Why a dependency target is editor-only content; an empty Reason means runtime content. */
+struct FAethelnEditorOnlyTarget
+{
+	FString Reason;
+	/** A loaded /Script package flagged PKG_UncookedOnly and not PKG_EditorOnly. */
+	bool bUncookedOnlyScript = false;
 };
 
 struct FAethelnSoftReferenceRule
@@ -151,13 +163,46 @@ public:
 		const FString& TargetAudience,
 		const TArray<FAethelnSoftReferenceRule>& Rules);
 
-	/** Returns why a dependency target is editor-only content, or an empty string for runtime content. */
-	static FString ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage);
+	/** Applies the policy's hard-reference audience matrix: whether a package of SourceAudience may hard-reference one of TargetAudience. */
+	static bool IsHardReferenceAllowed(
+		const TMap<FString, TSet<FString>>& Rules,
+		const FString& SourceAudience,
+		const FString& TargetAudience);
 
-	/** Applies the classifier to runtime (hard and soft Game) dependencies only; NotGame references are never failures. */
+	/** Classifies whether a dependency target is editor-only content. */
+	static FAethelnEditorOnlyTarget ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage);
+
+	/**
+	 * Applies the classifier to runtime (hard and soft Game) dependencies only; NotGame references are never failures.
+	 * A UBlueprint-class package's UncookedOnly-only script targets go to OutRecorded instead of the failures.
+	 */
 	static TArray<FString> SelectEditorOnlyRuntimeDependencyFailures(
 		const FAethelnObservedPackage& Package,
-		TFunctionRef<FString(const FString& TargetPackage)> ClassifyTarget);
+		TFunctionRef<FAethelnEditorOnlyTarget(const FString& TargetPackage)> ClassifyTarget,
+		TArray<FString>& OutRecorded);
+
+	/**
+	 * Returns a failure for every ungoverned /Game target of a runtime (hard or soft Game) dependency.
+	 * An ungoverned NotGame /Game target is recorded in OutRecorded instead of failing.
+	 */
+	static TArray<FString> SelectBrokenGameReferences(
+		const FAethelnObservedPackage& Package,
+		TFunctionRef<bool(const FString& TargetPackage)> IsGoverned,
+		TArray<FString>& OutRecorded);
+
+	/** Records the texture family facts, reading size and mips from the editor source data. */
+	static void CollectTextureFacts(
+		const UTexture& Texture,
+		bool bDataValid,
+		const FString& ValidationEvidence,
+		TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts);
+
+	/** Records the skeletal mesh collision facts; the PhysicsAsset bodies are the collision source. */
+	static void CollectSkeletalMeshCollisionFacts(
+		const USkeletalMesh& SkeletalMesh,
+		bool bDataValid,
+		const FString& SkeletalEvidence,
+		TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts);
 
 	/** Derives the closed v2 status vocabulary from typed observed facts. */
 	static FAethelnContentFamilyResult EvaluateFamilyFacts(

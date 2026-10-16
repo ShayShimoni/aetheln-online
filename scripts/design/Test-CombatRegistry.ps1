@@ -203,11 +203,11 @@ function Test-CombatRegistry {
 	$ApprovedPrototypeIds = @(
 		'combat.resource.health', 'combat.resource.endurance', 'combat.resource.guard', 'combat.damage.wrought',
 		'order.oathscar.weapon.sword_and_shield', 'order.oathscar.ability.sword_shield_basic_chain',
-		'order.oathscar.ability.gate_step', 'order.oathscar.ability.sworn_rebuke',
-		'order.oathscar.ability.hold_the_line'
+		'order.oathscar.ability.instant_strike', 'order.oathscar.ability.parry',
+		'order.oathscar.ability.attack_stance', 'order.oathscar.ability.defense_stance'
 	)
 	if ($Schema.prototypeCandidateIds.Count -ne $ApprovedPrototypeIds.Count -or @($Schema.prototypeCandidateIds | Sort-Object -Unique).Count -ne $ApprovedPrototypeIds.Count) {
-		$Errors.Add('schema: prototype allowlist differs from the approved nine IDs')
+		$Errors.Add('schema: prototype allowlist differs from the approved ten IDs')
 	}
 	foreach ($Id in $ApprovedPrototypeIds) {
 		if ($Schema.prototypeCandidateIds -cnotcontains $Id) { $Errors.Add("schema: approved prototype ID $Id is missing") }
@@ -469,4 +469,11 @@ if (-not $SkipMain) {
 		exit 1
 	}
 	Write-Output "PASS: combat registry ($($Result.definitionCount) definitions)"
+	. (Join-Path $PSScriptRoot 'Test-CombatTagMapping.ps1') -SkipMain
+	$TagResult = Test-CombatTagMapping -SourceRoot (Join-Path $PSScriptRoot '..\..\Source') -RegistryPath $RegistryPath
+	if (-not $TagResult.passed) {
+		$TagResult.errors | ForEach-Object { Write-Output "FAIL: $_" }
+		exit 1
+	}
+	Write-Output "PASS: combat tag mapping ($($TagResult.tagCount) native Ability. tags)"
 }

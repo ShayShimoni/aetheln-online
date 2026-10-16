@@ -39,7 +39,7 @@ documents, and it changes no product rule. It consumes the activation seam in
 contact pipeline in [Attack Timeline and Three-Hit Combo](attack-timeline-and-combo.md)
 (Issue #60). Every distance, duration, window, arc, cost, cooldown, and Guard
 value stays `TBD`; a `Provisional...` config key is a named placeholder, never
-tuning. C++ names are proposed code names. Guard, Endurance, Hold the Line, and
+tuning. C++ names are proposed code names. Guard, Endurance, Parry, and
 Oathscar are working names.
 
 **Citations.** Repository `path:line` citations are valid at `develop`
@@ -81,8 +81,8 @@ relative to the root of the pinned UE 5.8.1 source, revision `71fe36aac5`.
    three things the owner required of it: the defense state tag
    (`State.Blocking`, with its server-time interval), an authored arc, and a
    Guard-consequence hook that #60 calls once per blocked hit. The slot lives
-   on #60's timeline subsystem, keyed by the ASC. #260's Hold the Line uses
-   the same slot.
+   on #60's timeline subsystem, keyed by the ASC. #260's Parry uses the
+   same slot ([The Parry](#the-parry)).
 7. **The block arc is measured from server state.** The incoming direction is
    the yaw-only vector from the defender's capsule center to the attacker's
    combat-frame origin at the contact time, compared with the defender's
@@ -109,7 +109,7 @@ Prototype Boundary and Existing Owners; `docs/characters-and-factions.md:349`;
 | --- | --- | --- |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, base ability, cost and cooldown (P4), grant validation, `FindForPawn`, `State.Dead`. Adds the selected movement-carried entry (T1) and separate owner outcome; reconciles shared checks and operation safety (see [Dependencies on #19](#dependencies-on-19)). | Change ordinary schema/sequence/aim-time history, PlayerState ownership, or lifecycle policy. |
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Provides the dodge invulnerability window and tag for the avoidance step, and the defense slot (tag, arc, hook) for the defense step. Consumes the timeline driver's boundary pass and the requests-before-contacts rule. Dodge and block activations reset the chain like any other action. | Contacts, the contact order, damage, the already-hit records, or deciding "blocked or not" (#60 does, against #18's defense state). |
-| [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the defense slot Hold the Line reuses. | Hold the Line, Gate Step, or Sworn Rebuke behavior. |
+| [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the defense slot and hook contract the Parry reuses ([The Parry](#the-parry)). | The Parry's window, result, and stagger, or any other representative active. |
 | [#17](https://github.com/ShayShimoni/aetheln-online/issues/17) | Extends the project movement component with the dodge movement on `FLAG_Custom_2`. Its airborne facing bound (Q12) is delivered by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306). | Sprint, jump, facing, or other movement rules. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Ends the dodge window and the block when `State.Dead` is added, tested through the test seam. | Apply `State.Dead`, run death, respawn, or reconnect, or test the integrated death and respawn case. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | Provides outcomes, replicated state tags, corrections, and result cues to present. | HUD, animation, effects, `GameplayCue.*` tags. |
@@ -560,13 +560,13 @@ sends a `Release` for a held block, as the #82 contract requires
 The owner decision requires the block to expose exactly three things to #60:
 a defense state tag, an authored defense arc, and a server hook for the Guard
 consequence. They live in one server-only slot per ASC, held by #60's timeline
-subsystem, which #260's Hold the Line also uses:
+subsystem, which #260's Parry also uses:
 
 ```cpp
 /** The one active directional defense of a target. Server only. */
 struct FAethelnDefenseState
 {
-	FGameplayTag StateTag;                    // State.Blocking (Hold the Line: its own state tag)
+	FGameplayTag StateTag;                    // State.Blocking (Parry: State.Oathscar.Parrying)
 	double ActiveFromServerTime = 0.0;        // inclusive: S + RaiseSeconds
 	double ActiveUntilServerTime = TNumericLimits<double>::Max(); // exclusive: set on release, break, or cancel
 	double ArcDegrees = 0.0;                  // full arc: 2 * ProvisionalArcHalfAngleDegrees, TBD
@@ -593,8 +593,8 @@ struct FAethelnDefenseState
   1e-9 rounding tolerance. The actor yaw is
   server-simulated and rate-limited on the ground; the control rotation is
   client-supplied and is never used.
-- **One slot.** Registering while a slot is active fails closed. Block and Hold
-  the Line block each other (Q10), so this cannot happen through content. A
+- **One slot.** Registering while a slot is active fails closed. Block and the
+  Parry block each other (#260 default), so this cannot happen through content. A
   slot without a bound Guard hook is refused, and a slot whose hook's owner
   has expired defends nothing, so no slot blocks for free. The
   block registers the slot before it commits: a failed registration ends the
@@ -614,7 +614,7 @@ struct GAMECOMBAT_API FAethelnBlockedContact
 	float GuardPressure = 0.0f;   // the attack's authored pressure (Q7), TBD
 };
 
-enum class EAethelnBlockConsequence : uint8 { Blocked, GuardBroken };
+enum class EAethelnBlockConsequence : uint8 { Blocked, GuardBroken, Parried }; // Parried: #260
 ```
 
 #60 calls `OnBlockedHit` once per blocked contact; its allowance records stop
@@ -622,7 +622,9 @@ a duplicate, reordered, or replayed candidate from reaching the hook again.
 The block's hook:
 
 1. Applies `UAethelnGuardPressureEffect` from the attacker's ASC with
-   `GuardPressure`. The attribute set clamps Guard at zero.
+   `GuardPressure`. The attribute set clamps Guard at zero. Positive pressure
+   restarts the defender's Guard recovery delay (#292,
+   [Resource Recovery](gas-foundation.md#resource-recovery)).
 2. If Guard is now zero, breaks the guard: sets the slot's
    `ActiveUntilServerTime` to the contact time, ends the block activation,
    and removes `State.Blocking`. Per Q8 (owner-approved 2026-10-10) it also adds
@@ -656,6 +658,84 @@ change halfway through a contact.
 - **Prediction.** The client may show a raise at press; a rejection outcome
   cancels it. Guard, the slot, and results are never predicted.
 
+## The Parry
+
+#260 owns the Parry (`order.oathscar.ability.parry`), a representative active
+since the owner's redesign of 2026-10-13
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)):
+a short timed defensive window; a hit that lands inside it is fully negated
+and the attacker is staggered. It reuses this document's defense slot and hook
+contract. Its shared rules, relations, tests (K5 to K9), and open decisions are
+in [Representative Oathscar Actives](gas-foundation.md#representative-oathscar-actives-260).
+Every value below is `TBD` (#107).
+
+- **Activation.** `UAethelnParryAbility` is a seam `Press` with no
+  `Release`, `ServerOnly` in both policies. On acceptance at server time
+  `S` it registers the slot before it commits, as the block does: a failed
+  registration ends the activation uncommitted (`InternalFailure`, nothing
+  spent), and a failed commit clears the slot. It then commits its optional
+  Endurance cost and `Cooldown.Oathscar.Parry` and holds
+  `State.Oathscar.Parrying`.
+- **The window is server time.** The slot's interval is
+  `[S + WindowStart, S + WindowEnd)`, both offsets authored
+  (`ProvisionalParry`, `TBD`), set when the slot registers, so the interval
+  is exact from the start. The end registers as a non-chain boundary
+  (`RegisterNonChainBoundaries`, as the dodge does) that removes the tag and
+  ends the activation at `S + WindowEnd`. The window starts at the server's
+  acceptance, half a round trip after the press: a client cannot move it
+  earlier, and present-time unfairness applies as for the dodge (residual
+  risk 1).
+- **The server decides.** #60's defense step evaluates the slot at the
+  authoritative contact time and the arc, exactly as for the block
+  ([Defense state exposed to #60](#defense-state-exposed-to-60)). The client
+  never claims a parry; no request field can carry one. Avoidance still
+  resolves first.
+- **The Parry hook** returns `Parried`. A parried contact applies no Health
+  damage, no Guard pressure, and no Guard break: it is fully negated. The hook
+  then staggers the attacker (the contact's `Source`) once:
+  1. It calls the timeline's interruption with the attacker as the
+     interrupted party at the contact time, without the attacker step's
+     `InterruptibleUntil` check, because the Parry is the authored rule
+     (owner: the attacker is staggered). A player attacker's chain ends with
+     `Interrupted` stamped at the contact time; an enemy's registered steps
+     are stamped and `OnTargetInterrupted` fires, so the #83 controller
+     enters its `Interrupted` state. The attacker's later contacts in the
+     frame fail revalidation.
+  2. For a player attacker it adds `State.Staggered` for `StaggerSeconds`
+     through the shared duration effect, from the resolution time, as the
+     Guard break does; a zero duration grants nothing, and `State.Dead`
+     removes it. What a staggered player may do is a #260 default
+     (every project ability refused, movement free), still open. What a
+     staggered enemy does beyond `Interrupted` is #20's.
+- **Several contacts.** Every contact inside the window is parried, and each
+  distinct attacker is staggered once; a duplicate, reordered, or replayed
+  candidate converges on the recorded result through #60's allowance (lane
+  default: the window does not end at the first parry; open).
+- **Relations (defaults, open; the attack-press rule is decided).** The Parry and the block refuse each other,
+  because one slot exists per ASC; the Parry is refused while dodging and
+  inside the chain's commitment window; an accepted dodge ends a running
+  Parry window, as it ends a block (Q10). `State.Dead`, avatar loss, and
+  teardown end the window at the processing time. Decided (owner, 2026-10-14,
+  [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6156696832)):
+  while the window is open an attack press, the chain or Instant Strike, is
+  refused until it ends, as the block refuses one.
+- **Committed result for Skein.** A committed `Parried` result is the trigger
+  the Witnessed Reprisal Thread consumes later; that Thread is not prototype
+  scope.
+- **Nothing is predicted.** The client may play a cosmetic parry stance at
+  press; the outcome cancels it.
+- **As built (#260 P3).** The slot's whole interval is fixed when it registers, so
+  `SetDefenseState` cannot tell a running Parry from an ended one; the Parry and
+  the block refuse each other through their state tags instead
+  (`State.Blocking` blocks the Parry, `State.Oathscar.Parrying` blocks the
+  block). The window end is an ASC boundary (`OpenParryWindow`,
+  `ApplyParryBoundaries`) that ends the activation and the tag at
+  `S + WindowEnd`; an accepted dodge calls `CancelParry`. The hook staggers
+  through the timeline's `ForceInterrupt`. `State.Staggered` comes from
+  `UAethelnStaggerEffect`, which State.Dead removes, and it is a blocking tag
+  of the base ability and a reset tag of the chain. A `Parried` result
+  reports as the Block event category.
+
 ## Prediction Policy
 
 - **Predicted:** the dodge displacement only, as supported custom movement
@@ -681,7 +761,7 @@ change halfway through a contact.
 | Replicated movement | Observers | Engine |
 | `State.Dodging`, `State.DodgeInvulnerable`, `State.Blocking` | Owner and observers | Loose `TagOnly` tags |
 | `State.GuardBroken` | Owner (the effect, `Mixed` mode) and observers (minimal replicated tags) | Granted by the shared duration effect |
-| Result cues `Avoided`, `Blocked`, `GuardBroken` | Everyone relevant | #60's unreliable multicast |
+| Result cues `Avoided`, `Blocked`, `GuardBroken`, `Parried` | Everyone relevant | #60's unreliable multicast |
 
 - **A separate outcome RPC.** Movement-carried outcomes do not share #19's
   sequence space; #19's client rule ("an outcome for any later sequence means
@@ -710,7 +790,7 @@ correlation only. No GameNet vocabulary changes.
 | Block press or release accepted | `Block` | `Accepted` | #19 seam fields |
 | Block rejected | `Block`; `Cooldown`; `Resource` | #19's mapping | #19 seam fields |
 | Committed `Avoided` result (#60 emits) | `Dodge` | `Accepted` | The attack's activation id, ability id, sequence |
-| Committed `Blocked` or `GuardBroken` result (#60 emits) | `Block` | `Accepted` | Same |
+| Committed `Blocked`, `GuardBroken`, or `Parried` result (#60 emits; #260 P3) | `Block` | `Accepted` | Same |
 
 - **Server ordinal.** Movement-carried requests have no client sequence, and
   the contract drops events with sequence 0. The ASC therefore issues a
@@ -801,8 +881,9 @@ the lead's sign-off on T2 and T3 as #60 owner (2026-10-11).
 4. **Guard pressure (Q7).** Guard pressure is attack-authored (owner-approved
    2026-10-10), so #60's step definition gains `GuardPressure`, validated as
    finite and non-negative at grant. No content version is bumped: the
-   production chain has no configured steps or version yet (they fail grant
-   until #107), so only test fixtures author it.
+   production chain had no configured steps or version then (they failed grant),
+   so only test fixtures authored it. The chain's first configured version, 1,
+   came later with the D3 provisional values in `Config/DefaultGame.ini` (#84 P3).
 5. **Result events.** The committed-result event uses subject `Dodge` for
    `Avoided` and `Block` for `Blocked` and `GuardBroken`.
 6. **The scope of steps 6a to 6d.** #60's Validation additions say the steps
@@ -905,7 +986,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D22 | `Aetheln.GameCombat.Defense.AvoidanceBeatsContact` | P4 | H | An enemy contact inside the window is `Avoided` with no damage, no Guard change, and no hook call; at the window end it hits; a dodge processed in the same frame as a contact follows the requests-before-contacts rule |
 | D23 | `Aetheln.GameCombat.Defense.ActionRelations` | P4 | H | The adopted Q10 relations with test tags: a dodge ends a block; a block is refused during `State.Dodging`; the chain's commitment tag blocks both; a dodge or block activation resets the chain (`OtherAction`); a second defense slot fails closed |
 | D24 | `Aetheln.GameCombat.Defense.NetworkConditionsBlock` | P4 | H | Press and Release under normal, high-latency, and packet-loss delivery around enemy contacts: blocked exactly when the server arrival precedes the contact under the stamping rule; duplicated and reordered requests get sequence reasons; the hook never runs twice |
-| D25 | `Aetheln.GameCombat.Defense.DefenseResultTelemetry` | P4 | H | `Avoided`, `Blocked`, and `GuardBroken` emit the events in the table, with no target identity and no Guard value |
+| D25 | `Aetheln.GameCombat.Defense.DefenseResultTelemetry` | P4 | H | `Avoided`, `Blocked`, and `GuardBroken` emit the events in the table, with no target identity and no Guard value (`Parried` reports as Block, #260 P3, and K6 checks it) |
 | D26 | `Aetheln.POC.Input.DodgeAndBlockBindings` | P5 | H | A dodge press sets the flag only in Reticle mode and when the local gate passes; the gate fails during the commitment window of an owner `ClientCombatActivation` record and while a replicated blocking tag is present; right mouse maps to Press and Release; Cursor entry releases a held block; the recapture click is never a block |
 | D27 | `Aetheln.GameCombat.Net.DodgeAndBlockTwoClients` | P5 | P | Additional PIE evidence under #82 C1 and C2: the owner's predicted dodge and the other client's view follow the same path; outcomes go to the owner only; both clients see the tags and cues; refused-dodge correction rates recorded |
 | D28 | Packaged two-client dodge and block run | later | K | Evidence for #2 and #48; not required to merge #18 |
@@ -922,11 +1003,11 @@ lifecycle cancellation without stale revival; D15 shares mixed-route flood
 coverage with T14/T21. Existing assertions and network-profile evidence remain
 required; these are future test obligations, not newly passing tests.
 
-CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
-so each code PR records local automation evidence at its exact head on the
-pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and P4 run
-`Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and records
-the manual PIE steps.
+CI ran a frozen two-test filter until #237 widened it to every declared
+`Aetheln.` test, so each code PR records local automation evidence at its exact
+head on the pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and
+P4 run `Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and
+records the manual PIE steps.
 
 ## Acceptance-Criteria Mapping
 
@@ -992,11 +1073,11 @@ the lead posted on the owner's behalf. Every numeric value stays `TBD` (#107,
 | 11 (Q4) | Owner-approved 2026-10-10: a dodge always has an Endurance cost or a cooldown. Grant validation refuses a dodge whose cost and cooldown are both zero; the values stay with #107. | Grant validation in [Server-owned windows](#server-owned-windows); D7 |
 | 12 (Q5) | Owner-approved 2026-10-10: blocking does not restrict movement speed or turning in the prototype phases. Authored restrictions come later with #17's predicted movement, as for attacks (#60 OQ4). | [Activation through the seam](#activation-through-the-seam): the block adds no movement rule |
 | 13 (Q6) | Owner-approved 2026-10-10: a blocked hit deals no Health damage. A blocked contact stops at the defense step. | [The Guard hook](#the-guard-hook); D20 |
-| 14 (Q7) | Owner-approved 2026-10-10: Guard pressure comes from the attack. Each attack step authors its `GuardPressure` (canon gives Gate Step authored Guard pressure, `docs/characters-and-factions.md:313-314`). | [Dependencies on #60](#dependencies-on-60) item 4 |
+| 14 (Q7) | Owner-approved 2026-10-10: Guard pressure comes from the attack. Each attack step authors its `GuardPressure` (canon gave the superseded Gate Step authored Guard pressure; Instant Strike's is 0 by owner rule, 2026-10-13). | [Dependencies on #60](#dependencies-on-60) item 4 |
 | 15 (Q8) | Owner-approved 2026-10-10: a Guard break ends the block and prevents raising it again for an authored duration, with no stagger or interruption (those stay per-step #60 rules). A block `Press` with zero Guard gets `InsufficientResource`, which needs a block `CheckCost` override because #19's `CheckCost` checks only Endurance. | [The Guard hook](#the-guard-hook) step 2; D21 |
 | 16 (Q9) | Owner-approved 2026-10-10: a new ticket under #19's resource grammar owns passive and delayed server-clock recovery of Guard and Endurance, with values from #107, before P5's feel evidence. #18 does not design it. The ticket is [#292](https://github.com/ShayShimoni/aetheln-online/issues/292). | #292; [Residual Risks and Known Gaps](#residual-risks-and-known-gaps) item 5 |
-| 17 (Q10) | Owner-approved 2026-10-10: an accepted dodge ends a held block. A block is refused while `State.Dodging` holds. The chain's commitment tag blocks both, and their activation after `CancelOpen` resets the chain. An attack press while blocking is refused (release first). Block and Hold the Line block each other. | P4 action relations; D23 |
-| 18 (Q11) | Owner-approved 2026-10-10: no perfect block or parry in the prototype. The canon places it in a Thread (`docs/characters-and-factions.md:287`), outside the default prototype. | Nothing in the prototype |
+| 17 (Q10) | Owner-approved 2026-10-10: an accepted dodge ends a held block. A block is refused while `State.Dodging` holds. The chain's commitment tag blocks both, and their activation after `CancelOpen` resets the chain (the commitment tag of #260's Instant Strike blocks both and the chain too, by default, open). An attack press while blocking is refused (release first). Block and Hold the Line block each other (Hold the Line was dropped on 2026-10-13; block and the Parry block each other by #260's default). | P4 action relations; D23 |
+| 18 (Q11) | Owner-approved 2026-10-10: no perfect block or parry in the prototype. **Superseded** by the owner on 2026-10-13 ([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)): the Parry is a representative active, and the Witnessed Reprisal Thread now answers it. The block itself still has no perfect-block timing. | [The Parry](#the-parry) |
 | 19 (Q12) | Owner-approved 2026-10-10: #17 bounds airborne facing before the block phase (P4) merges, or the owner accepts the risk at that point. Delivered by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306): airborne aim-tracking facing turns at the existing 720 degrees/s camera-facing rate (residual risk 3). | P4 merge gate in [Phased Delivery](#phased-delivery); [Residual Risks and Known Gaps](#residual-risks-and-known-gaps) item 3 |
 | 20 (Q13) | Owner-approved 2026-10-10: the semantic IDs `combat.action.dodge` and `combat.action.block` are proposed for #106. The tags do not wait on the IDs. | The `AethelnGameplayTags` row of [Class Layout](#class-layout) |
 | 21 (Q16) | Owner-approved 2026-10-10: no refund when the displacement is cut short (a wall, a ledge, death). The commit and the window are authoritative at acceptance. #60's analogous OQ5 stays #60's. | [Cost and cooldown](#cost-and-cooldown) |
@@ -1060,9 +1141,11 @@ the remapping mechanism and controller layout (#82); display names.
    custom move data relies on build-identical clients and servers. F10's
    revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this
    is that revisit, and it keeps the build-identical rule.
-5. **No resource recovery** until the ticket assigned by Q9
-   ([#292](https://github.com/ShayShimoni/aetheln-online/issues/292))
-   delivers it.
+5. **No resource recovery in play yet.** Q9's ticket
+   ([#292](https://github.com/ShayShimoni/aetheln-online/issues/292)) defines
+   it in [Resource Recovery](gas-foundation.md#resource-recovery), but its
+   rates, periods, and delays are unset until #107 supplies them, so Guard and
+   Endurance still only fall.
 6. **Refused predictions are visible.** A stale local gate produces one
    correction. P5 records the rate.
 7. **PlayerState relevancy.** The state tags replicate from an always-relevant

@@ -3,8 +3,13 @@
 #include "Abilities/GameplayAbility.h"
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
+#include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayAbility.h"
+#include "AethelnGameplayTags.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
+#include "GameplayEffect.h"
+#include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityAvatar, Log, All);
@@ -33,6 +38,57 @@ void AAethelnPlayerState::PostInitializeComponents()
 	// pawn yet, so this sets the avatar to null on the server and on clients.
 	AbilitySystemComponent->InitAbilityActorInfo(this, GetPawn());
 	OnPawnSet.AddUniqueDynamic(this, &AAethelnPlayerState::HandlePawnSet);
+
+	// HUD (#61): owner outcomes become presentation-safe HUD events. The ASC is this
+	// actor's subobject, so these bindings live exactly as long as both.
+	AbilitySystemComponent->OnActivationOutcome.AddWeakLambda(this, [this](uint32 Sequence, EAethelnActivationResult Result)
+	{
+		HudActionOutcome.Broadcast(ToHudOutcome(Sequence, Result));
+	});
+	AbilitySystemComponent->OnMovementActivationOutcome.AddWeakLambda(this, [this](float /* ClientTimeStamp */, EAethelnActivationResult Result)
+	{
+		HudActionOutcome.Broadcast(ToHudOutcome(0, Result));
+	});
+	AbilitySystemComponent->OnCombatActivation.AddWeakLambda(this, [this](const FAethelnCombatActivationRecord& Record)
+	{
+		if (Record.AimCorrection == EAethelnAimCorrection::AimCorrected)
+		{
+			FAethelnHudActionOutcome Outcome;
+			Outcome.Kind = EAethelnHudOutcomeKind::Corrected;
+			Outcome.Sequence = Record.Sequence;
+			HudActionOutcome.Broadcast(Outcome);
+		}
+	});
+}
+
+void AAethelnPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AAethelnPlayerState, bKeptForGrace);
+}
+
+void AAethelnPlayerState::MarkKeptForGrace()
+{
+	bKeptForGrace = true;
+	SetIsInactive(true);
+	if (AGameStateBase* GameState = GetWorld() != nullptr ? GetWorld()->GetGameState() : nullptr) { GameState->RemovePlayerState(this); }
+}
+
+void AAethelnPlayerState::OnRep_KeptForGrace()
+{
+	// The engine's handler removes it from the local list and re-adds it only while active (GameStateBase.cpp:122-130).
+	SetIsInactive(bKeptForGrace);
+	OnRep_bIsInactive();
+}
+
+void AAethelnPlayerState::OnDeactivated()
+{
+	// The controller's CleanupPlayerState calls this at logout (PlayerController.cpp:1392-1398). The kept PlayerState keeps its
+	// ASC, effects and respawn wait running, so the kept pawn stays attackable; the reconnect takes its state (P4b).
+	if (!UAethelnDeathSubsystem::RetainForGrace(*this))
+	{
+		Super::OnDeactivated();
+	}
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
@@ -54,6 +110,70 @@ bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Req
 {
 	return AbilitySystemComponent != nullptr
 		&& AbilitySystemComponent->ProcessMovementCarriedRequest(Request) == EAethelnActivationResult::Accepted;
+}
+
+void AAethelnPlayerState::RequestAbilityPress(FGameplayTag AbilityId)
+{
+	if (AbilitySystemComponent != nullptr)
+	{
+		AbilitySystemComponent->RequestActivation(AbilityId, EAethelnActivationPhase::Press);
+	}
+}
+
+FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
+{
+	FAethelnHudSnapshot Snapshot;
+	if (AttributeSet == nullptr || AbilitySystemComponent == nullptr)
+	{
+		return Snapshot;
+	}
+	auto Read = [](float Current, float Max)
+	{
+		FAethelnHudResource Resource;
+		Resource.Current = Current;
+		Resource.Max = Max;
+		// Every maximum is 0 until the init or the first owner replication, so a 0 maximum is not a value yet.
+		Resource.bKnown = Max > 0.0f;
+		return Resource;
+	};
+	Snapshot.Health = Read(AttributeSet->GetHealth(), AttributeSet->GetMaxHealth());
+	Snapshot.Endurance = Read(AttributeSet->GetEndurance(), AttributeSet->GetMaxEndurance());
+	Snapshot.Guard = Read(AttributeSet->GetGuard(), AttributeSet->GetMaxGuard());
+
+	// Every owned Cooldown.* tag plus these timed states, each applied through a timed duration effect.
+	// Built once, on first use, after native tags are registered.
+	static const FGameplayTagContainer TimedTags = []
+	{
+		FGameplayTagContainer Tags;
+		Tags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Cooldown")));
+		Tags.AddTag(AethelnGameplayTags::State_GuardBroken);
+		Tags.AddTag(AethelnGameplayTags::State_EnduranceRecoveryDelayed);
+		Tags.AddTag(AethelnGameplayTags::State_GuardRecoveryDelayed);
+		return Tags;
+	}();
+	for (const FGameplayTag& Tag : AbilitySystemComponent->GetOwnedGameplayTags().Filter(TimedTags))
+	{
+		FAethelnHudTimedState& State = Snapshot.TimedStates.AddDefaulted_GetRef();
+		State.Tag = Tag;
+		for (const float Seconds : AbilitySystemComponent->GetActiveEffectsTimeRemaining(FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(Tag))))
+		{
+			State.RemainingSeconds = FMath::Max(State.RemainingSeconds, Seconds);
+		}
+	}
+	return Snapshot;
+}
+
+FAethelnHudActionOutcome AAethelnPlayerState::ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result)
+{
+	FAethelnHudActionOutcome Outcome;
+	Outcome.Sequence = Sequence;
+	if (Result != EAethelnActivationResult::Accepted)
+	{
+		// The owner already receives this result; its name carries no server-only detail.
+		Outcome.Kind = EAethelnHudOutcomeKind::Rejected;
+		Outcome.Reason = FName(*StaticEnum<EAethelnActivationResult>()->GetNameStringByValue(static_cast<int64>(Result)));
+	}
+	return Outcome;
 }
 
 bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec)
@@ -99,7 +219,14 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 					AbilitySystemComponent->GiveAbility(Spec);
 				}
 			}
-			UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			// A reconnect inside the grace window takes its carried state in place of the initial attributes (#21 P4).
+			if (ReconnectKey.IsEmpty() || !UAethelnDeathSubsystem::RestoreCarriedState(*AbilitySystemComponent, ReconnectKey))
+			{
+				UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			}
+			// Once per PlayerState, like the init: a re-possession never stacks a second recovery.
+			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnEnduranceRecoveryEffect::StaticClass(), ProvisionalEnduranceRecovery);
+			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnGuardRecoveryEffect::StaticClass(), ProvisionalGuardRecovery);
 		}
 		return;
 	}

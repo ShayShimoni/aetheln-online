@@ -11,6 +11,8 @@ public class GameTests : ModuleRules
 			"AssetRegistry",
 			"Core",
 			"CoreUObject",
+			// #21 P3: CQTest's PIE network component hosts the two-client death test (R5); it needs UnrealEd and IrisCore headers.
+			"CQTest",
 			"DesktopPlatform",
 			"Engine",
 			"GameCombat",
@@ -18,9 +20,17 @@ public class GameTests : ModuleRules
 			"GameNet",
 			"GameplayAbilities",
 			"GameplayTags",
+			"GameUI",
+			"IrisCore",
 			"Json",
 			"NavigationSystem",
-			"PhysicsCore"
+			// #60 P6: A21 closes a server connection (UNetConnection::Close links the NetCloseResult enum).
+			"NetCore",
+			// #84 P3b: N3 builds a Niagara effect notify for the allowlist case.
+			"Niagara",
+			"NiagaraAnimNotifies",
+			"PhysicsCore",
+			"UnrealEd"
 		});
 
 		bool bWithOpenSsl = Target.Platform == UnrealTargetPlatform.Win64

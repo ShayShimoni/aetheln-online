@@ -409,7 +409,7 @@ The foundation that implements these conventions is specified in
 [Gameplay Ability System Foundation](gas-foundation.md).
 
 **Two vocabularies, one mapping.** Canonical semantic IDs such as
-`combat.resource.endurance` and `order.oathscar.ability.gate_step` are the
+`combat.resource.endurance` and `order.oathscar.ability.instant_strike` are the
 content identity and belong to the registry work in
 [#106](https://github.com/ShayShimoni/aetheln-online/issues/106). Gameplay Tags
 are the runtime vocabulary. Every tag that names authored content maps one to
@@ -440,12 +440,15 @@ rename.
 | `Ability.Test.*`, `Test.*` | Test-only tags (`AethelnCombatTestTags`) for the automation tests. They name no content and map to no semantic ID. Declared in `GameCore` under `WITH_DEV_AUTOMATION_TESTS`, so Shipping builds carry none (see the Test Plan in [Gameplay Ability System Foundation](gas-foundation.md#test-plan)) | Automation tests only |
 
 **Order scope.** The `<Order>` segment appears only when the content's semantic
-ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.GateStep` and
-`Cooldown.Oathscar.GateStep`. Order-scoped state follows the same form,
+ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.InstantStrike` and
+`Cooldown.Oathscar.InstantStrike`. Order-scoped state follows the same form,
 `State.<Order>.<Name>`. A shared action with no Order-scoped semantic ID, such
 as dodge, block, or sprint, uses `<Family>.<Name>`, for example
-`Cooldown.Dodge` and `State.Dodging`. The basic chain takes the form its
-semantic ID dictates (`order.oathscar.ability.sword_shield_basic_chain` is
+`Cooldown.Dodge` and `State.Dodging`. An enemy-scoped semantic ID (an
+`enemy.<enemy>.` prefix, proposed for #106) gives `<Family>.Enemy.<Enemy>.<Name>`,
+as in `Ability.Enemy.Greybox.Strike` for `enemy.greybox.ability.strike`
+(#83); the `Enemy` segment keeps enemy tags apart from Order-scoped ones. The
+basic chain takes the form its semantic ID dictates (`order.oathscar.ability.sword_shield_basic_chain` is
 Order-scoped). `Ability.Melee.Combo1` is the spike's string and a spelling
 example only. This keeps the mapping from tag to semantic ID one to one.
 
@@ -466,19 +469,27 @@ bump it. The server accepts only an exact match and otherwise fails closed with
 `IncompatibleVersion`. The request struct has its own `SchemaVersion`, which is
 bumped on any layout change; an older schema is rejected. The authoritative
 `CombatActivation` record carries the `ContentVersion` the server used. Ability
-definitions live in config ini until #106 generates them. Until then, bumps are
-manual and checked in review.
+definitions live in config ini until an attack is migrated to its Shared attack
+definition asset
+([TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition)).
+Bumps are manual and checked in review.
 
 **Initial entries.**
 
 | Tag | Semantic ID | Owner |
 | --- | --- | --- |
-| `Ability.Oathscar.GateStep` | `order.oathscar.ability.gate_step` | #19 (skeleton), #60 (contact) |
-| `Ability.Oathscar.SwornRebuke` | `order.oathscar.ability.sworn_rebuke` | #19 (skeleton), #60 (contact) |
-| `Ability.Oathscar.HoldTheLine` | `order.oathscar.ability.hold_the_line` | #19 (skeleton), #60 (Guard result) |
+| `Ability.Oathscar.InstantStrike` | `order.oathscar.ability.instant_strike` | #260 P2 |
 | `Ability.Oathscar.SwordShieldBasicChain` | `order.oathscar.ability.sword_shield_basic_chain` | #60 P3 |
 | `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
-| `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |
+| `State.Oathscar.InstantStrike` | (commitment state of Instant Strike) | #260 P2 |
+| `Cooldown.Oathscar.InstantStrike` | (cooldown state of Instant Strike) | #260 P2 |
+| `Ability.Oathscar.Parry` | `order.oathscar.ability.parry` | #260 P3 |
+| `State.Oathscar.Parrying`, `Cooldown.Oathscar.Parry` | (window state and cooldown state of the Parry) | #260 P3 |
+| `State.Staggered`, `SetByCaller.Stagger.Duration` | (stagger state of a parried player attacker; duration of its effect) | #260 P3 |
+| `Ability.Oathscar.AttackStance` | `order.oathscar.ability.attack_stance` | #260 P4 |
+| `Ability.Oathscar.DefenseStance` | `order.oathscar.ability.defense_stance` | #260 P4 |
+| `State.Oathscar.AttackStance`, `State.Oathscar.DefenseStance` | (exclusive stance states granted by the two stance effects; the stances have no cooldown tag) | #260 P4 |
+| `SetByCaller.Stance.Duration` | (stance duration of the two stance effects) | #260 P4 |
 | `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
 | `Damage.Wrought` | `combat.damage.wrought` | #60 P4 |
 | `SetByCaller.Damage.Wrought` | (negated Wrought magnitude of the shared damage effect) | #60 P4 |
@@ -487,11 +498,17 @@ manual and checked in review.
 | `Ability.Block` | `combat.action.block` (proposed for #106, #18 Q13) | #18 P4 |
 | `Cooldown.Block`, `State.Blocking`, `State.GuardBroken` | (cooldown, block, and Guard-break states of the above) | #18 P4 |
 | `SetByCaller.Pressure.Guard` | (negated Guard pressure of the shared Guard pressure effect) | #18 P4 |
+| `State.EnduranceRecoveryDelayed`, `State.GuardRecoveryDelayed` | (recovery delay states of `combat.resource.endurance` and `combat.resource.guard`) | #292 |
+| `SetByCaller.Recovery.Amount`, `SetByCaller.Recovery.Delay` | (step amount and delay length of the recovery effects) | #292 |
+| `Ability.Enemy.Greybox.Strike` | `enemy.greybox.ability.strike` (working name, assigned by #83) | #83 P2 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and
-`combat.resource.guard`. The working names Gate Step, Sworn Rebuke, Hold the
-Line, Endurance, Guard, and Oathscar are not final display names.
+`combat.resource.guard`. The working names Instant Strike, Parry, Attack
+Stance, Defense Stance, Endurance, Guard, and Oathscar are not final display
+names. Gate Step, Sworn Rebuke, and Hold the Line were superseded on
+2026-10-13 (#260); #260 P2 removed their tags and classes. The tags of Parry and
+the stances were added with the PRs that created them (#260 P3 and P4).
 
 ## Pure Free Aim
 

@@ -107,3 +107,173 @@ class GAMECOMBAT_API UAethelnGuardPressureEffect : public UGameplayEffect
 public:
 	UAethelnGuardPressureEffect();
 };
+
+/**
+ * Passive and delayed recovery of one resource (#292), read from config. Every value is TBD (#107);
+ * a config entry is a named placeholder, never tuning. All zero means unset: no recovery.
+ */
+USTRUCT()
+struct GAMECOMBAT_API FAethelnResourceRecoveryValues
+{
+	GENERATED_BODY()
+
+	/** Amount recovered per second of server time while recovery runs. */
+	UPROPERTY()
+	float RatePerSecond = 0.0f;
+
+	/** Server-time interval between recovery steps; each step adds RatePerSecond * PeriodSeconds. */
+	UPROPERTY()
+	float PeriodSeconds = 0.0f;
+
+	/** Pause after each spend of the resource before recovery resumes. Zero: no pause. */
+	UPROPERTY()
+	float DelaySeconds = 0.0f;
+};
+
+/**
+ * Passive and delayed recovery of one resource on the server clock (docs/gas-foundation.md, Resource
+ * Recovery): an infinite periodic effect adding SetByCaller.Recovery.Amount to the resource each period.
+ * It pauses while State.Dead or its own delay tag holds and, when the pause ends, resumes one full period
+ * later. Only the server executes periods; clients receive the attribute values. The resource's maximum
+ * caps it through the attribute set's clamp.
+ */
+UCLASS(Abstract)
+class GAMECOMBAT_API UAethelnResourceRecoveryEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	/**
+	 * Server only. Applies the recovery once. Unset values apply nothing; values that are non-finite, negative,
+	 * or a positive rate without a positive period log and apply nothing (fail closed).
+	 */
+	static FActiveGameplayEffectHandle Start(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery, const FAethelnResourceRecoveryValues& Values);
+
+	/**
+	 * Server only. Called after each spend of the recovery's resource: restarts its delay, so recovery
+	 * resumes DelaySeconds after the latest spend. Without an active recovery or a delay, it does nothing.
+	 */
+	static void RestartDelay(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery);
+
+	/** The tag the delay grants; it pauses this recovery. */
+	FGameplayTag GetDelayTag() const { return DelayTag; }
+
+protected:
+	/** Called from a subclass constructor. */
+	void Configure(const FGameplayAttribute& Attribute, const FGameplayTag& InDelayTag);
+
+private:
+	FGameplayTag DelayTag;
+};
+
+/** Endurance recovery; each Endurance cost commit restarts its delay. */
+UCLASS()
+class GAMECOMBAT_API UAethelnEnduranceRecoveryEffect : public UAethelnResourceRecoveryEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnEnduranceRecoveryEffect();
+};
+
+/** Guard recovery; each applied Guard pressure restarts its delay. */
+UCLASS()
+class GAMECOMBAT_API UAethelnGuardRecoveryEffect : public UAethelnResourceRecoveryEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnGuardRecoveryEffect();
+};
+
+/**
+ * The death state (#21): infinite, granting State.Dead through the spec's dynamic granted tags, as the Guard
+ * break does. Mixed replication sends the effect to the owner and the tag to every other client. Only the
+ * death transition (UAethelnDeathSubsystem) applies it; respawn removes it (docs/death-and-respawn.md).
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnDeathStateEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnDeathStateEffect();
+
+	/** Server only. */
+	static void ApplyTo(UAbilitySystemComponent& AbilitySystemComponent);
+
+	/** Server only. Removes the death effect, and so State.Dead; only the respawn calls it. */
+	static void RemoveFrom(UAbilitySystemComponent& AbilitySystemComponent);
+};
+
+/**
+ * The respawn restoration (#21 P2; provisional, owner-set decision, issue #21 comment 6131998770, re-tuned at the P5
+ * feel test): instant, overriding exactly Health, Endurance and Guard with the target's own maximum. No maximum,
+ * cooldown effect, ability, or other state changes. Only the death subsystem applies it, before it removes the
+ * death effect (docs/death-and-respawn.md).
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnRespawnRestorationEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnRespawnRestorationEffect();
+
+	/** Server only. */
+	static void ApplyTo(UAbilitySystemComponent& AbilitySystemComponent);
+};
+
+/**
+ * The stagger of a parried player attacker (#260; docs/dodge-and-block.md, The Parry): a duration effect that grants
+ * State.Staggered for SetByCaller.Stagger.Duration seconds, the duration of the Parry's authored StaggerSeconds. State.Dead
+ * removes it and refuses a new one, so a respawned avatar never inherits it. Only the Parry hook applies it, and a zero
+ * duration is never applied.
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnStaggerEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnStaggerEffect();
+
+	/** Server only. Applies the stagger to the target for Seconds; false for a non-finite or non-positive duration. */
+	static bool ApplyTo(UAbilitySystemComponent& AbilitySystemComponent, float Seconds);
+};
+
+/**
+ * A stance buff (#260 P4; docs/gas-foundation.md, Stance): a duration effect that grants its exclusive state tag for
+ * SetByCaller.Stance.Duration seconds. State.Dead removes it and refuses a new one, so no stance survives death or returns
+ * with the respawn. It carries no modifier: what a stance changes is TBD (#107) and, until decided, only its tag exists.
+ * Only the stance abilities apply it, and they remove the other stance first.
+ */
+UCLASS(Abstract)
+class GAMECOMBAT_API UAethelnStanceEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+protected:
+	/** Called from a subclass constructor with the state tag the subclass grants. */
+	void Configure(const FGameplayTag& StanceTag);
+};
+
+/** The Attack Stance buff: grants State.Oathscar.AttackStance. */
+UCLASS()
+class GAMECOMBAT_API UAethelnAttackStanceEffect : public UAethelnStanceEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnAttackStanceEffect();
+};
+
+/** The Defense Stance buff: grants State.Oathscar.DefenseStance. */
+UCLASS()
+class GAMECOMBAT_API UAethelnDefenseStanceEffect : public UAethelnStanceEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnDefenseStanceEffect();
+};

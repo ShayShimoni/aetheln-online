@@ -2,10 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "EnhancedInputComponent.h"
+#include "GameplayTagContainer.h"
+#include "InputCoreTypes.h"
 #include "AethelnPOCInputComponent.generated.h"
 
 class IAethelnPlayerInputReceiver;
 class APlayerController;
+class UAethelnHudWidget;
 class UAethelnPOCOverlayWidget;
 class ULocalPlayer;
 class UInputAction;
@@ -18,16 +21,66 @@ enum class EAethelnPOCControlMode : uint8
 };
 
 /**
+ * Routes the left mouse button (#60 P6, docs/attack-timeline-and-combo.md, Input path across modules).
+ * Cursor mode: the press recaptures and is consumed until its release. Reticle mode: the press is an
+ * attack, unless it was consumed. A recapture click is never an attack, and a fresh press is needed after it.
+ */
+struct GAMEUI_API FAethelnPrimaryButtonRouter
+{
+	enum class EAction : uint8
+	{
+		None,
+		Recapture,
+		Attack,
+	};
+
+	EAction Press(EAethelnPOCControlMode Mode);
+	void Release() { bConsumed = false; }
+
+private:
+	bool bConsumed = false;
+};
+
+/** Sends one ability press through the controller's PlayerState as an IAethelnCombatInputSink. False if it is not one. */
+GAMEUI_API bool SubmitAbilityPress(APlayerController* Controller, FGameplayTag AbilityId);
+
+/** Sends the basic-chain press (the left mouse button's attack). */
+GAMEUI_API bool SubmitPrimaryAttack(APlayerController* Controller);
+
+/**
+ * The press of one of the four representative Oathscar actives (#260 P5): sent only in Reticle mode, never in Cursor mode, and
+ * never through the recapture router (these keys have no recapture role). True if a press was sent.
+ */
+GAMEUI_API bool RouteActivePress(EAethelnPOCControlMode Mode, APlayerController* Controller, FGameplayTag AbilityId);
+
+/**
  * Client-only transient Enhanced Input setup for the movement POC.
  * The component is selected only by the POC pawn Blueprint.
  */
-UCLASS(Transient)
+UCLASS(Transient, Config=Game)
 class GAMEUI_API UAethelnPOCInputComponent : public UEnhancedInputComponent
 {
 	GENERATED_BODY()
 
 public:
 	UAethelnPOCInputComponent();
+
+	/**
+	 * Keys of the four representative Oathscar actives (#260 P5). The key layout is #82's, so none is chosen here or in the ini:
+	 * an invalid key (the default) maps nothing, and the press has no way in. A run sets them in
+	 * [/Script/GameUI.AethelnPOCInputComponent] of an untracked ini, for example Saved/Config/WindowsEditor/Game.ini.
+	 */
+	UPROPERTY(Config)
+	FKey InstantStrikeKey;
+
+	UPROPERTY(Config)
+	FKey ParryKey;
+
+	UPROPERTY(Config)
+	FKey AttackStanceKey;
+
+	UPROPERTY(Config)
+	FKey DefenseStanceKey;
 
 protected:
 	virtual void OnRegister() override;
@@ -62,7 +115,11 @@ private:
 	void HandleMoveRightStarted(const FInputActionValue& Value);
 	void HandleMoveRightStopped(const FInputActionValue& Value);
 	void HandleToggleControlMode(const FInputActionValue& Value);
+	/** The left mouse button: recaptures in Cursor mode, attacks in Reticle mode (see FAethelnPrimaryButtonRouter). */
 	void HandleViewportRecapture(const FInputActionValue& Value);
+	void HandleViewportRecaptureReleased(const FInputActionValue& Value);
+	/** One of the four actives: a Reticle-mode press only, sent to the server as an ability press; Cursor mode sends nothing. */
+	void HandleActivePress(const FInputActionValue& Value, FGameplayTag AbilityId);
 	void HandleJumpStarted(const FInputActionValue& Value);
 	void HandleJumpStopped(const FInputActionValue& Value);
 	void HandleJumpCanceled(const FInputActionValue& Value);
@@ -95,6 +152,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> ViewportRecaptureAction;
 
+	/** Instant Strike, Parry, Attack Stance, Defense Stance, in that order. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UInputAction>> ActiveActions;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> JumpAction;
 
@@ -107,9 +168,13 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UAethelnPOCOverlayWidget> OverlayWidget;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UAethelnHudWidget> HudWidget;
+
 	TWeakObjectPtr<UObject> ReceiverObject;
 	TWeakObjectPtr<ULocalPlayer> AppliedLocalPlayer;
 	TWeakObjectPtr<APlayerController> AppliedPlayerController;
+	FAethelnPrimaryButtonRouter PrimaryButton;
 	FDelegateHandle DeactivateHandle;
 	FDelegateHandle ReactivateHandle;
 	EAethelnPOCControlMode ControlMode = EAethelnPOCControlMode::Reticle;

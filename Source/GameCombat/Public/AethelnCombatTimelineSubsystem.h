@@ -8,7 +8,9 @@ class UAethelnAbilitySystemComponent;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnAttackWindowDelegate, const FAethelnCombatActivationRecord&, const FAethelnAttackSampleInterval&);
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatResultDelegate, const FAethelnCombatResult&);
-DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnLethalResultDelegate, UAethelnAbilitySystemComponent* /* TargetAsc */, const FGuid& /* ActivationId */);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FAethelnLethalResultDelegate, UAethelnAbilitySystemComponent* /* TargetAsc */, const FGuid& /* ActivationId */, double /* ContactTime */);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnInterruptedDelegate, UAethelnAbilitySystemComponent* /* TargetAsc */, double /* ContactTime */);
+DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnPassDelegate, double /* Now */);
 
 /**
  * One own-world server pass after actor tick: buffered starts, sweeps of the authored volumes,
@@ -38,6 +40,9 @@ public:
 	/** The one relation rule (OQ1): players are allies, only enemies are hostile, never self. Faction policy replaces it later. */
 	static bool IsHostile(const UAethelnAbilitySystemComponent& Attacker, const UAethelnAbilitySystemComponent& Target);
 
+	/** Not alive: State.Dead, no Health attribute (fails closed until #21), or zero Health. Revalidation step 1. */
+	static bool IsAlive(const UAethelnAbilitySystemComponent& AbilitySystem);
+
 	/**
 	 * Server only. The defense owner (#18) registers a target's one defense slot. Returns false while
 	 * another slot is still held (no finite end), so a second slot fails closed; an ended slot is
@@ -47,6 +52,12 @@ public:
 	void EndDefenseState(UAethelnAbilitySystemComponent& Target, double EndTime);
 	void ClearDefenseState(UAethelnAbilitySystemComponent& Target);
 	const FAethelnDefenseState* FindDefenseState(UAethelnAbilitySystemComponent& Target) const;
+
+	/**
+	 * Server only. The Parry staggers its attacker (#260): the same interruption as a committed interrupting hit,
+	 * stamped at the contact time, without the attacker step's InterruptibleUntil check. Called from the Parry hook.
+	 */
+	void ForceInterrupt(UAethelnAbilitySystemComponent& Target, double ContactTime);
 
 	/**
 	 * Authored avoidance set, checked by presence when the contact resolves: a target holding any of
@@ -59,10 +70,27 @@ public:
 	FAethelnAttackWindowDelegate OnWindowEvaluated;
 	/** Every committed result, in resolution order, for audit. */
 	FAethelnCombatResultDelegate OnResultCommitted;
-	/** Raised once per target from its lethal committed result; #21 binds it and applies State.Dead. */
+	/**
+	 * Raised once per target from its lethal committed result, with its contact time; #21 binds it and applies
+	 * State.Dead, and the enemy controller (#83) dies at that time.
+	 */
 	FAethelnLethalResultDelegate OnLethalResult;
+	/**
+	 * Pass step 1, after the players' buffered starts and before the sweeps. The enemy controllers (#83) advance
+	 * to Now here, so a step they register at S <= Now is swept and resolved in this same pass.
+	 */
+	FAethelnPassDelegate OnPassStart;
+	/** After pass step 5 (emission). The enemy controllers (#83) apply a pending reset here. */
+	FAethelnPassDelegate OnPassEnd;
+	/**
+	 * Raised once per committed interruption, during resolution, after the target's steps are stamped at the
+	 * contact time. An enemy has no chain, so this is how its controller learns of it (#83).
+	 */
+	FAethelnInterruptedDelegate OnTargetInterrupted;
 
 #if WITH_DEV_AUTOMATION_TESTS
+	/** Test-only: lets two players be hostile, for the Parry's player-attacker leg. Tests reset it. */
+	inline static bool bPlayersHostileForTests = false;
 	int32 GetRegisteredStepCountForTests() const { return Steps.Num(); }
 	int32 GetSweepCountForTests() const { return SweepCountForTests; }
 	void SetNextOrdinalForTests(uint64 Ordinal) { NextOrdinal = Ordinal; }
@@ -104,6 +132,8 @@ private:
 	void HandlePostActorTick(UWorld* World, ELevelTick TickType, float DeltaSeconds);
 	void Sweep(const FStep& Entry, const FAethelnAttackSampleInterval& Interval, const FVector& NowOrigin, double Now, TArray<FCandidate>& OutCandidates);
 	void Resolve(const FCandidate& Candidate, TArray<FCommitted>& OutCommitted);
+	/** Ends the target's step and chain at the contact time if the step at that time is still interruptible, or always when forced. */
+	void Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime, bool bForce = false);
 	void Emit(const FCommitted& Committed);
 	uint32 GetOrAssignCombatId(UAethelnAbilitySystemComponent& AbilitySystem);
 	TArray<FStep> Steps;

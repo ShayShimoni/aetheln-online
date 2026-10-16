@@ -8,29 +8,30 @@
 UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 {
 	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+	CommitmentTag = AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain;
 	ResetTags.AddTag(AethelnGameplayTags::State_Dead);
 	// #18 Q17 and Q10: no attack while dodging or blocking. Each blocking tag is also a reset tag (grant rule).
-	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag() })
+	// #260 (default, open): nor inside a committed Instant Strike (its own constructor swaps this for the chain's).
+	// Owner, 2026-10-14: nor while a Parry window is open, as for the block (Q10). Accepting a Parry resets a running chain
+	// itself (OtherAction) before the tag is held, so the reset tag only guards a window that is somehow already open.
+	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(),
+		AethelnGameplayTags::State_Oathscar_InstantStrike.GetTag(), AethelnGameplayTags::State_Staggered.GetTag(), AethelnGameplayTags::State_Oathscar_Parrying.GetTag() })
 	{
 		ActivationBlockedTags.AddTag(Tag);
 		ResetTags.AddTag(Tag);
 	}
-	// No authored steps/version/sampling/cost preset. Unset production fails grant.
+	// No preset in code: the values come only from Config/DefaultGame.ini (#84 D3), and unset config fails grant.
 }
 
 const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 {
 	if (const TCHAR* Problem = Super::FindGrantProblem()) { return Problem; }
-	if (ProvisionalCooldownSeconds != 0.0f || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
-	if (ProvisionalSteps.Num() != 3) { return TEXT("does not have exactly three chain steps"); }
+	// Every hit of a multi-step chain commits, so a chain cooldown would block its next hit; a single step may have one.
+	if ((StepCount > 1 && ProvisionalCooldownSeconds != 0.0f) || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
+	if (StepCount < 1 || ProvisionalSteps.Num() != StepCount) { return TEXT("does not have its authored number of steps"); }
 	if (!ResetTags.HasTagExact(AethelnGameplayTags::State_Dead)) { return TEXT("does not reset on State.Dead"); }
-	if (!FMath::IsFinite(ProvisionalMaxSampleDistance) || ProvisionalMaxSampleDistance <= 0.0
-		|| !FMath::IsFinite(ProvisionalMaxSampleAngleDegrees) || ProvisionalMaxSampleAngleDegrees <= 0.0)
-	{
-		return TEXT("has unset or invalid sampling bounds");
-	}
-	const FGameplayTagContainer Commitment(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
-	if (Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
+	const FGameplayTagContainer Commitment(CommitmentTag);
+	if (!CommitmentTag.IsValid() || Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
 	{
 		return TEXT("blocks or resets its own commitment");
 	}
@@ -38,42 +39,7 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 	{
 		if (!ResetTags.HasTagExact(Tag)) { return TEXT("has a blocking tag without a reset event"); }
 	}
-	for (int32 Index = 0; Index < ProvisionalSteps.Num(); ++Index)
-	{
-		const FAethelnAttackStepDefinition& S = ProvisionalSteps[Index];
-		for (double Value : { S.ActiveStart, S.ActiveEnd, S.BufferOpen, S.LinkOpen, S.LinkClose, S.RecoveryEnd, S.CancelOpen, S.MaxAimPitchDegrees })
-		{
-			if (!FMath::IsFinite(Value) || Value < 0.0) { return TEXT("has a non-finite or negative step value"); }
-		}
-		if (!(S.ActiveStart < S.ActiveEnd && S.ActiveEnd <= S.BufferOpen
-			&& S.ActiveEnd <= S.CancelOpen && S.CancelOpen <= S.RecoveryEnd))
-		{
-			return TEXT("has invalid active, buffer or commitment ordering");
-		}
-		if (Index == 2)
-		{
-			if (S.BufferOpen != S.RecoveryEnd || S.LinkOpen != 0.0 || S.LinkClose != 0.0)
-			{
-				return TEXT("has a final-step buffer or link window");
-			}
-		}
-		else if (!(S.BufferOpen <= S.LinkOpen && S.LinkOpen <= S.RecoveryEnd
-			&& S.RecoveryEnd <= S.LinkClose && S.LinkOpen < S.LinkClose))
-		{
-			return TEXT("has invalid link or recovery ordering");
-		}
-		if (S.Shape > EAethelnAttackShape::Box || S.ShapeExtent.ContainsNaN()
-			|| S.ShapeExtent.X <= 0.0 || S.ShapeExtent.Y <= 0.0 || S.ShapeExtent.Z <= 0.0
-			|| (S.Shape == EAethelnAttackShape::Capsule && S.ShapeExtent.Z < S.ShapeExtent.X)
-			|| !S.PathStart.IsValid() || !S.PathEnd.IsValid()
-			|| !FMath::IsFinite(S.WroughtDamage) || S.WroughtDamage < 0.0f
-			|| !FMath::IsFinite(S.GuardPressure) || S.GuardPressure < 0.0f
-			|| S.MaxTargets < 1 || S.MaxAimPitchDegrees > 90.0)
-		{
-			return TEXT("has an invalid shape, damage, Guard pressure, target bound or pitch clamp");
-		}
-	}
-	return nullptr;
+	return AethelnAttackTimeline::FindStepListProblem(ProvisionalSteps, ProvisionalMaxSampleDistance, ProvisionalMaxSampleAngleDegrees);
 }
 
 bool UAethelnBasicChainAbility::CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,

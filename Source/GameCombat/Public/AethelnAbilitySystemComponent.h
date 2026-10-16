@@ -12,6 +12,7 @@ class AController;
 class UAethelnBasicChainAbility;
 class UAethelnCombatTimelineSubsystem;
 class UAethelnDodgeAbility;
+class UAethelnParryAbility;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnActivationOutcomeDelegate, uint32 /* Sequence */, EAethelnActivationResult /* Result */);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnMovementActivationOutcomeDelegate, float /* ClientTimeStamp */, EAethelnActivationResult /* Result */);
@@ -34,9 +35,18 @@ struct FAethelnServerDodgeWindow
 	double InvulnerableEnd = 0.0;
 	double ActionEnd = 0.0;
 };
+/** Server-only end of the Parry window (#260): the activation and State.Oathscar.Parrying end at End. */
+struct FAethelnServerParryWindow
+{
+	bool bOpen = false;
+	FGuid OperationId;
+	FGameplayAbilitySpecHandle Handle;
+	double End = 0.0;
+};
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatActivationDelegate, const FAethelnCombatActivationRecord&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnChainEndDelegate, const FGuid&, EAethelnChainEndReason);
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatResultCueDelegate, const FAethelnCombatResultCue&);
+DECLARE_MULTICAST_DELEGATE(FAethelnDeathCueDelegate);
 
 /** Server-only chain bookkeeping, separate from GAS activation and observer state. */
 struct FAethelnServerChainState
@@ -49,9 +59,13 @@ struct FAethelnServerChainState
 	double BufferedStartTime = 0.0;
 	FGameplayAbilitySpecHandle Handle;
 	TWeakObjectPtr<UAethelnBasicChainAbility> Ability;
+	/** The ability's commitment tag, captured with its definitions (#260: each single-step active has its own). */
+	FGameplayTag CommitmentTag;
 	TArray<FAethelnAttackStepDefinition> Definitions;
 	FAethelnAcceptedAttackInput CurrentInput;
 	FAethelnAcceptedAttackInput BufferedInput;
+	/** A pass-started buffered step's record, held until the pass emits it; an interruption before its start drops it (A28). */
+	FAethelnCombatActivationRecord HeldRecord;
 };
 
 /** One connection's token bucket for activation messages (validation step 1). Starts full. */
@@ -202,6 +216,8 @@ public:
 	FAethelnChainEndDelegate OnChainEnded;
 	/** Every client, and the server: presentation only. Losing one loses nothing authoritative. */
 	FAethelnCombatResultCueDelegate OnCombatResultCue;
+	/** Every client, and the server: presentation only, once per death (#21 P3). Losing one loses nothing authoritative. */
+	FAethelnDeathCueDelegate OnDeathCue;
 	const FAethelnAttackPresentationState& GetAttackPresentationState() const { return AttackPresentationState; }
 
 	/** Authority only; stamp the step and clear the chain once, without removing a mid-frame step. */
@@ -211,6 +227,11 @@ public:
 	void CancelDodge();
 	/** Authority only; ends a held block at the processing time (an accepted dodge, Q10 and Q18). */
 	void CancelBlock();
+	/** Authority only; ends a running Parry window at the processing time (an accepted dodge, as for a held block). */
+	void CancelParry();
+	/** Authority only; the Parry opens its end boundary after it commits. False when the timeline refuses it. */
+	bool OpenParryWindow(const FGuid& OperationId, FGameplayAbilitySpecHandle Handle, double EndTime);
+	void CloseParryWindow(const FGuid& OperationId);
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Rate bucket placeholder, never tuning; #45 owns the final value. Without config (0) every request is rate limited. */
@@ -259,6 +280,10 @@ public:
 	virtual void ServerSetReplicatedEvent_Implementation(EAbilityGenericReplicatedEvent::Type EventType, FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey) override;
 	virtual void ServerSetReplicatedEventWithPayload_Implementation(EAbilityGenericReplicatedEvent::Type EventType, FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey, FVector_NetQuantize100 VectorPayload) override;
 
+	/** Closed (#324): no server state dump, no client debug-string write, no reply; one bucket token, metric only. */
+	virtual void ServerPrintDebug_Request_Implementation() override;
+	virtual void ServerPrintDebug_RequestWithStrings_Implementation(const TArray<FString>& Strings) override;
+
 	/** Flushes an open rate-limited window. */
 	virtual void OnUnregister() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -296,13 +321,19 @@ protected:
 	/** On the target's ASC: a committed result's presentation-safe cue. */
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastCombatResultCue(const FAethelnCombatResultCue& Cue);
+	/** On the victim's ASC: raised once per death by UAethelnDeathSubsystem. It carries no attribute value and no gameplay truth. */
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastDeathCue();
 
 private:
 	friend class UAethelnGameplayAbility;
 	friend class UAethelnBasicChainAbility;
 	friend class UAethelnDodgeAbility;
 	friend class UAethelnBlockAbility;
+	friend class UAethelnParryAbility;
+	friend class UAethelnStanceAbility;
 	friend class UAethelnCombatTimelineSubsystem;
+	friend class UAethelnDeathSubsystem;
 
 	/** The seam's result slot, open only while the seam activates this one spec handle. */
 	struct FSeamScope
@@ -328,8 +359,10 @@ private:
 	FRequestScope* ActiveRequestScope = nullptr;
 
 	bool BeginChainPress(UAethelnBasicChainAbility& Ability, FGameplayAbilitySpecHandle Handle);
-	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime);
-	void StartBufferedChainStep(double Now);
+	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime, bool bHoldRecord = false);
+	void StartBufferedChainStep(double Now, bool bHoldRecord = false);
+	/** Pass step 5: sends a held buffered-start record. */
+	void SendHeldCombatActivation();
 	void ApplyChainBoundaries(double Now);
 	void HandleChainResetTag(const FGameplayTag Tag, int32 NewCount);
 	void BindChainResetTags(const FGameplayTagContainer& Tags);
@@ -351,6 +384,8 @@ private:
 	void HandleDodgeDeadTag(const FGameplayTag Tag, int32 NewCount);
 	FAethelnServerDodgeWindow DodgeWindow;
 	FDelegateHandle DodgeDeadHandle;
+	void ApplyParryBoundaries(double Now);
+	FAethelnServerParryWindow ParryWindow;
 	/** Per PlayerState lifetime, from 1: telemetry correlation for movement-carried outcomes, never a client sequence. */
 	uint32 MovementActivationOrdinal = 0;
 

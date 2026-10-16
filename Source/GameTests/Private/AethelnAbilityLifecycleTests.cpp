@@ -8,11 +8,15 @@
 #include "AethelnCombatGameMode.h"
 #include "AethelnCombatTestAbilities.h"
 #include "AethelnCombatTestWorld.h"
+#include "AethelnDeathSubsystem.h"
+#include "AethelnGameplayTags.h"
 #include "AethelnPlayerCharacter.h"
+#include "AethelnPlayerController.h"
 #include "AethelnPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameMode.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/WorldSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -381,7 +385,8 @@ bool FAethelnReconnectInterimGapTest::RunTest(const FString& Parameters)
 {
 	using namespace AethelnAbilityLifecycleTests;
 
-	FScopedCombatTestWorld TestWorld;
+	// A game instance, because the combat game mode is installed through UWorld::SetGameMode.
+	FScopedCombatTestWorld TestWorld(true);
 	FTestPlayer Player;
 	if (!SpawnTestPlayer(*this, TestWorld, Player))
 	{
@@ -395,26 +400,52 @@ bool FAethelnReconnectInterimGapTest::RunTest(const FString& Parameters)
 
 	Player.Controller->Possess(Pawn);
 	AethelnCombatTests::ApplyInstantModifier(*Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
-	Player.AbilitySystem->ApplyGameplayEffectToSelf(
-		AethelnCombatTests::MakeTestEffect(EGameplayEffectDurationType::Infinite), 1.0f, Player.AbilitySystem->MakeEffectContext());
-	TestEqual(TEXT("Old PlayerState carries one active effect (a stand-in for a cooldown)"), Player.AbilitySystem->GetNumActiveGameplayEffects(), 1);
+	// A real cooldown: the shared timed effect, as an ability applies it.
+	FGameplayEffectSpec Cooldown(GetDefault<UAethelnCooldownEffect>(), Player.AbilitySystem->MakeEffectContext(), 1.0f);
+	Cooldown.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cooldown_Duration, 20.0f);
+	Cooldown.DynamicGrantedTags.AddTag(AethelnGameplayTags::Cooldown_Block);
+	Player.AbilitySystem->ApplyGameplayEffectSpecToSelf(Cooldown);
+	TestEqual(TEXT("Old PlayerState carries one active effect (a cooldown)"), Player.AbilitySystem->GetNumActiveGameplayEffects(), 1);
 
-	// AGameModeBase never reuses an inactive PlayerState, so a reconnect gets a fresh one.
-	Player.Controller->UnPossess();
-	AAethelnPlayerState* ReconnectedPlayerState = AttachFreshPlayerState(TestWorld, *Player.Controller);
+	// AGameModeBase never reuses an inactive PlayerState, so a reconnect gets a fresh one. The logout (the controller's
+	// destruction) keeps the old PlayerState and the pawn for the grace window under the reconnect key (#21 P4b), and the
+	// combat game mode resumes them for a fresh PlayerState with the same key.
+	TestWorld.World->GetWorldSettings()->DefaultGameMode = AAethelnCombatGameMode::StaticClass();
+	AAethelnCombatGameMode* GameMode = TestWorld.World->SetGameMode(FURL()) ? TestWorld.World->GetAuthGameMode<AAethelnCombatGameMode>() : nullptr;
+	if (!TestNotNull(TEXT("The world takes the combat game mode"), GameMode))
+	{
+		return false;
+	}
+	// The configured input-enabled Blueprint pawn is not this test's subject.
+	GameMode->InputEnabledPawnClass.Reset();
+	GameMode->DefaultPawnClass = AAethelnPlayerCharacter::StaticClass();
+	// A fixture grace window (review L7), never the provisional ini value.
+	UAethelnDeathSubsystem* Deaths = TestWorld.World->GetSubsystem<UAethelnDeathSubsystem>();
+	if (!TestNotNull(TEXT("The authority world owns the death subsystem"), Deaths))
+	{
+		return false;
+	}
+	Deaths->ProvisionalDisconnectGraceSeconds = 5.0f;
+	Player.PlayerState->SetReconnectKey(TEXT("t34-key"));
+	Player.Controller->Destroy();
+	APlayerController* NewController = TestWorld.Spawn<AAethelnPlayerController>();
+	AAethelnPlayerState* ReconnectedPlayerState = NewController != nullptr ? AttachFreshPlayerState(TestWorld, *NewController) : nullptr;
 	if (!TestNotNull(TEXT("Fresh PlayerState exists"), ReconnectedPlayerState))
 	{
 		return false;
 	}
-	Player.PlayerState->Destroy();
-	Player.Controller->Possess(Pawn);
+	ReconnectedPlayerState->SetReconnectKey(TEXT("t34-key"));
+	GameMode->RestartPlayer(NewController);
 
-	// Known interim gap, owned by #21: reconnect is a free refill. #21 flips these assertions.
+	// The gap #19 pinned here is closed: a reconnect inside the grace window is not a free refill, and the player resumes its
+	// own pawn. Every client presents the server-issued key (P4b).
 	UAethelnAbilitySystemComponent* ReconnectedAbilitySystem = ReconnectedPlayerState->GetAethelnAbilitySystemComponent();
+	TestTrue(TEXT("The reconnect resumes the same pawn"), NewController->GetPawn() == Pawn);
 	TestTrue(TEXT("Pawn resolves to the fresh PlayerState ASC"), UAethelnAbilitySystemComponent::FindForPawn(Pawn) == ReconnectedAbilitySystem);
-	TestEqual(TEXT("Interim gap: Health is refilled to its configured value"), ReconnectedAbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), MakeTestInitValues().Health);
-	TestEqual(TEXT("Interim gap: no effect carries over"), ReconnectedAbilitySystem->GetNumActiveGameplayEffects(), 0);
-	TestEqual(TEXT("Interim gap: abilities are granted again"), ReconnectedAbilitySystem->GetActivatableAbilities().Num(), 1);
+	TestEqual(TEXT("Health is carried over, not refilled to its configured value"), ReconnectedAbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), MakeTestInitValues().Health - 10.0f);
+	TestEqual(TEXT("The cooldown effect carries over"), ReconnectedAbilitySystem->GetNumActiveGameplayEffects(), 1);
+	TestTrue(TEXT("The cooldown tag is held"), ReconnectedAbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::Cooldown_Block));
+	TestEqual(TEXT("Abilities are granted once on the fresh PlayerState"), ReconnectedAbilitySystem->GetActivatableAbilities().Num(), 1);
 	return true;
 }
 

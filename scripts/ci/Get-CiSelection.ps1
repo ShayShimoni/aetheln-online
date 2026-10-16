@@ -383,7 +383,7 @@ function Get-PathCheckSelection {
 		'scripts/tests/Test-ObservabilityContract.ps1',
 		'scripts/tests/Test-SourceControlPolicy.ps1'
 	)
-	if ($PortableOnlyPaths -ccontains $Path -or $Path -cmatch '^docs/.+' -or $Path -cmatch '^output/pdf/.+' -or
+	if ($PortableOnlyPaths -ccontains $Path -or $Path -cmatch '^docs/.+' -or $Path -cmatch '^output/pdf/.+' -or $Path -cmatch '^(scripts/)?design/.+' -or
 		$Path -cmatch '^tests/.+\.(ps1|md)$' -or $Path -cmatch '^[^/]+\.md$' -or
 		$Path -cmatch '^\.github/(ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)/[^/]+\.(md|yml|yaml)$' -or
 		$Path -cmatch '^\.github/(PULL_REQUEST_TEMPLATE|pull_request_template)\.md$') { $Recognized = $true }

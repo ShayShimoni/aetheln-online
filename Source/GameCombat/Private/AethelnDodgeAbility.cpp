@@ -11,6 +11,8 @@ UAethelnDodgeAbility::UAethelnDodgeAbility()
 	bMovementCarried = true;
 	// Q10: the chain's commitment blocks the dodge. A held block does not: the accepted dodge ends it.
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+	// #260 (default, open): a committed Instant Strike also blocks the dodge, so it cannot be cancelled.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_InstantStrike);
 	// No authored version, definition, cost or cooldown preset: unset production config fails grant.
 }
 
@@ -64,6 +66,8 @@ void UAethelnDodgeAbility::ActivateAbility(
 	}
 	// Q10 and Q18: the accepted dodge ends a held block at its acceptance time S, the processing time.
 	ASC->CancelBlock();
+	// #260 default, open: it ends a running Parry window the same way.
+	ASC->CancelParry();
 }
 
 void UAethelnDodgeAbility::EndAtActionEnd()

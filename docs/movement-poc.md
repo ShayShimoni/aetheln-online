@@ -87,7 +87,8 @@ Blueprint, template map, or template input asset was imported.
 ## Runtime composition
 
 `/Game/Maps/MovementPOC` is a classic, non-World-Partition map with OFPA
-disabled. It has 21 actors:
+disabled. It has 24 actors (the earlier 21 plus the three added by P4; no test counts
+them):
 
 - 17 static, non-ticking greybox geometry actors using two meshes and one
   shared grid material
@@ -95,6 +96,10 @@ disabled. It has 21 actors:
 - one movable directional light
 - one movable real-time skylight
 - one sky-atmosphere actor
+- one `NavMeshBoundsVolume` over the whole floor, one built static `RecastNavMesh`,
+  and one greybox `AAethelnEnemyCharacter` on open floor, added in content
+  version 2 by [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) P4
+  (see [Enemy AI and Navigation](enemy-ai-and-navigation.md#authoring-the-map))
 
 The course is approximately 60 m square. A single continuous safety floor sits
 under the complete traversal loop. The course includes:
@@ -105,8 +110,8 @@ under the complete traversal loop. The course includes:
 - three camera-collision obstacles
 - four perimeter safety walls
 
-There are no navigation bounds, combat actors, effects, audio, or interactive
-actors. The map overrides its game mode only through
+There are no effects or audio. The one placed enemy is a temporary prototype
+greybox, not production content. The map overrides its game mode only through
 `BP_MovementPOCGameMode`; the project-wide game mode remains
 `AAethelnGameModeBase`.
 
@@ -408,6 +413,59 @@ root; `CharacterMovementComponent.cpp` below is
   that measurement. Apart from the POC backpedal scale (0.7, owner-confirmed in
   the tuning table below), every value in this section is an engine default,
   not a tuned project decision, kept until evidence resolves it.
+
+### Server rejections (issue #17 AC4)
+
+How the server answers the invalid inputs named in AC4, and the test that
+covers each. The tests describe current engine and project behavior. They add or
+change no threshold. Time-discrepancy detection stays off, and its thresholds
+stay `TBD` (#2, #45). The `Reject.*` tests differ in how the hostile input is
+made. The mode and acceleration tests rewrite the client's saved move right
+before the engine packs it, the stale test replays earlier honest packets after
+newer ones, and the displacement test moves the client and then predicts
+normally. Every move goes through the real packed move path.
+
+| Input | Server response | Test |
+| --- | --- | --- |
+| Sprint or aim flag the simulation does not allow | Sprint speed is granted only when the server's own move is eligible; aim facing is rate limited | `InvalidSprintRejected`, `FacingSpoofBounded` |
+| Speed beyond the cap | Server speed is capped per move, with its own walk, sprint and backpedal limits | `ServerSpeedClamp` |
+| Claimed movement mode | Correction, and the server keeps its own mode (`ServerExceedsAllowablePositionError`) | `Reject.ClientModeMismatch` |
+| Stale timestamp | Move is dropped before simulation (`IsClientTimeStampValid`) | `Reject.StaleTimestamp` |
+| Duplicate timestamp | Move is dropped before simulation | `LoopbackTransport` |
+| Acceleration over the limit | Not rejected: the server clamps the claim to `MaxAcceleration` and simulates the clamped value | `Reject.AccelerationOverLimit` |
+| Large displacement | Correction; the server does not adopt the client location (`ClientAuthorativePosition=false`) | `Reject.DisplacementTeleport` |
+| Invalid transition | Covered. A jump request while airborne is refused: the server's `ACharacter::CanJumpInternal` allows one jump per ground contact (`JumpMaxCount` stays at the engine default of 1), so the flag is received and ignored, the server's jump count and vertical speed continue on their own path, and no correction is needed (`Reject.TransitionJumpWhileAirborne`). A claimed landing while the server has the pawn falling is corrected, and the server stays airborne (`Reject.TransitionClaimedLanding`); the engine's generic mode-mismatch correction refuses it, with no project code involved. A claimed mode change from the ground is corrected (`Reject.ClientModeMismatch`), an ineligible sprint state gets no sprint speed (`InvalidSprintRejected`, `AethelnCharacterMovementComponent.cpp:947`), and a refused dodge start is rolled back (`DodgeRefusedRollsBack`, `AethelnDodgeMovementTests.cpp:352`). A jump after walking off a ledge (jump count 0 while falling) takes a different engine branch and has no dedicated test; adding one is an optional follow-up. | `Reject.TransitionJumpWhileAirborne`, `Reject.TransitionClaimedLanding`, `Reject.ClientModeMismatch`, `InvalidSprintRejected`, `DodgeRefusedRollsBack` |
+| Rotation | Not corrected: facing is derived by the server and rate limited | `FacingSpoofBounded`, `AirborneFacingBounded` |
+
+### Two-client dedicated-server test (issue #17 DoD)
+
+`Aetheln.Movement.Net.TwoClientMoveAndSprint`
+(`Source/GameTests/Private/AethelnTwoClientMovementTests.cpp`) runs one PIE session
+with a **dedicated server** and two clients in one process, on real net drivers over
+loopback (CQTest's `FPIENetworkComponent`, the harness of
+[the death and respawn test](death-and-respawn.md)). It runs under the combat game mode
+on an empty CQTest map with a replicated fixture floor
+(`AethelnMovementTestFloor.h`), and it simulates no input device and no separate
+process. Client 0 (the mover) walks 300 cm and then sprints 700 cm through the
+character's real input entry points (`ReceiveMoveInput`, `ReceiveSprintIntent`) along
+a control yaw of 90 degrees, so its facing changes from the spawn facing. Client 1 only
+watches. The route lengths are test values, not tuning.
+
+When the mover has stopped, the test requires:
+
+- the server's pawn to have travelled the route and to face its direction of travel;
+- the server's measured speed to stay at or below the walk cap while walking, to rise
+  above the walk cap while sprinting, and never to exceed the speed the server's own
+  movement component allows (read from the component, not hardcoded);
+- the mover's own client and the observer's client to show the mover's pawn within 5 cm
+  of the server's position and within 3 degrees of the server's facing.
+
+The tolerances are measurement limits, not tuning. Pawns replicate
+location to 0.01 cm (`APawn` sets `RoundTwoDecimals`), the owning client is held within
+about 1.7 cm of the server by `MAXPOSITIONERRORSQUARED` 3, so 5 cm leaves margin, and
+replicated rotation uses `ByteComponents`, a byte per axis (about 1.4 degrees). The run takes about 3 seconds after PIE starts and passed
+three consecutive runs. It does not add an impaired-link variant: the network profiles
+and the correction and rubber-banding measurements stay with #45.
 
 ## Verification and feedback
 

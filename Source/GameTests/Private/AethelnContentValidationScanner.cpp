@@ -875,6 +875,20 @@ namespace
 		return false;
 	}
 
+	/** True when every asset class in the package is a loaded UBlueprint subclass. */
+	bool IsBlueprintClassPackage(const FAethelnObservedPackage& Package)
+	{
+		for (const FString& ClassPath : Package.ClassPaths)
+		{
+			const UClass* Class = FindObject<UClass>(nullptr, *ClassPath);
+			if (Class == nullptr || !Class->IsChildOf(UBlueprint::StaticClass()))
+			{
+				return false;
+			}
+		}
+		return !Package.ClassPaths.IsEmpty();
+	}
+
 	FString DescribeObservedClasses(const FAethelnObservedPackage& Package)
 	{
 		return FString::Join(Package.ClassPaths, TEXT(", "));
@@ -1075,14 +1089,7 @@ namespace
 					ImportedVertices,
 					SkeletalMesh->GetMorphTargets().Num(),
 					SkeletalMesh->GetMeshOnlySocketList().Num());
-				RecordFacts(OutFacts, TEXT("collision"), TEXT("profile"), true, SkeletalEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}}, {}, {},
-					{{TEXT("profile_name"), BodySetup == nullptr ? FString() : BodySetup->DefaultInstance.GetCollisionProfileName().ToString()}});
-				RecordFacts(OutFacts, TEXT("collision"), TEXT("simple_complex_policy"), true, SkeletalEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}},
-					{{TEXT("simple_shape_count"), BodySetup == nullptr ? 0 : BodySetup->AggGeom.GetElementCount()}, {TEXT("trace_flag"), BodySetup == nullptr ? -1 : static_cast<int64>(BodySetup->GetCollisionTraceFlag())}});
-				RecordFacts(OutFacts, TEXT("collision"), TEXT("presentation_equivalence"), true, SkeletalEvidence + TEXT(";quantitative_policy=TBD"),
-					{{TEXT("authoritative_geometry_present"), PhysicsAsset != nullptr}}, {}, {}, {}, true);
+				FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*SkeletalMesh, bDataValid, SkeletalEvidence, OutFacts);
 				RecordFacts(OutFacts, TEXT("rendering_suitability"), TEXT("lod"), true, SkeletalEvidence,
 					{{TEXT("asset_data_valid"), bDataValid}, {TEXT("imported_model_present"), bHasImportedModel}},
 					{{TEXT("source_model_count"), LodCount}, {TEXT("render_lod_count"), LodCount}});
@@ -1103,27 +1110,7 @@ namespace
 
 			if (const UTexture* Texture = Cast<UTexture>(Object))
 			{
-				const int64 Width = FMath::RoundToInt64(Texture->GetSurfaceWidth());
-				const int64 Height = FMath::RoundToInt64(Texture->GetSurfaceHeight());
-				const UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
-				const int32 Mips = Texture2D == nullptr ? 0 : Texture2D->GetNumMips();
-				const FString TextureEvidence = FString::Printf(
-					TEXT("%s;width=%lld;height=%lld;mips=%d;compression=%d;address_x=%d;address_y=%d;virtual_texture_streaming=%s;streaming_method=%d"),
-					*ValidationEvidence, Width, Height, Mips, static_cast<int32>(Texture->CompressionSettings),
-					static_cast<int32>(Texture->GetTextureAddressX()), static_cast<int32>(Texture->GetTextureAddressY()),
-					Texture->VirtualTextureStreaming ? TEXT("true") : TEXT("false"),
-					static_cast<int32>(Texture->GetTextureStreamingMethod()));
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("pbr_channels"), true, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("width"), Width}, {TEXT("height"), Height}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("tiling"), true, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("address_x"), static_cast<int64>(Texture->GetTextureAddressX())}, {TEXT("address_y"), static_cast<int64>(Texture->GetTextureAddressY())}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("compression"), true, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("compression_setting"), static_cast<int64>(Texture->CompressionSettings)}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("mips"), Texture2D != nullptr, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("width"), Width}, {TEXT("height"), Height}, {TEXT("mip_count"), Mips}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("streaming"), true, TextureEvidence + TEXT(";quantitative_policy=TBD"),
-					{{TEXT("virtual_texture_streaming"), Texture->VirtualTextureStreaming != 0}},
-					{{TEXT("streaming_method"), static_cast<int64>(Texture->GetTextureStreamingMethod())}}, {}, {}, true);
+				FAethelnContentValidationScanner::CollectTextureFacts(*Texture, bDataValid, ValidationEvidence, OutFacts);
 			}
 
 			if (const UMaterialInterface* Material = Cast<UMaterialInterface>(Object))
@@ -1628,7 +1615,16 @@ bool FAethelnContentValidationScanner::IsSoftReferenceAllowed(
 	return false;
 }
 
-FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage)
+bool FAethelnContentValidationScanner::IsHardReferenceAllowed(
+	const TMap<FString, TSet<FString>>& Rules,
+	const FString& SourceAudience,
+	const FString& TargetAudience)
+{
+	const TSet<FString>* AllowedTargets = Rules.Find(SourceAudience);
+	return AllowedTargets != nullptr && AllowedTargets->Contains(TargetAudience);
+}
+
+FAethelnEditorOnlyTarget FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage)
 {
 	// UHT flags Editor-module script packages PKG_EditorOnly and UncookedOnly-module script packages
 	// PKG_UncookedOnly; a saved editor-only content package carries PKG_EditorOnly in its package flags.
@@ -1637,11 +1633,17 @@ FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistr
 		const UPackage* ScriptPackage = FindPackage(nullptr, *TargetPackage);
 		if (ScriptPackage == nullptr)
 		{
-			return TEXT("script package is not loaded in the Editor, so it cannot be proven runtime content");
+			return {TEXT("script package is not loaded in the Editor, so it cannot be proven runtime content")};
 		}
-		return ScriptPackage->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly)
-			? FString(TEXT("script package is flagged PKG_EditorOnly or PKG_UncookedOnly"))
-			: FString();
+		if (ScriptPackage->HasAnyPackageFlags(PKG_EditorOnly))
+		{
+			return {TEXT("script package is flagged PKG_EditorOnly")};
+		}
+		if (ScriptPackage->HasAnyPackageFlags(PKG_UncookedOnly))
+		{
+			return {TEXT("script package is flagged PKG_UncookedOnly"), true};
+		}
+		return {};
 	}
 	TArray<FAssetData> TargetAssets;
 	Registry.GetAssetsByPackageName(FName(*TargetPackage), TargetAssets, true, true);
@@ -1649,30 +1651,156 @@ FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistr
 	{
 		if (TargetAsset.HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly))
 		{
-			return TEXT("package is flagged PKG_EditorOnly or PKG_UncookedOnly");
+			return {TEXT("package is flagged PKG_EditorOnly or PKG_UncookedOnly")};
 		}
 	}
-	return FString();
+	return {};
 }
 
 TArray<FString> FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(
 	const FAethelnObservedPackage& Package,
-	TFunctionRef<FString(const FString& TargetPackage)> ClassifyTarget)
+	TFunctionRef<FAethelnEditorOnlyTarget(const FString& TargetPackage)> ClassifyTarget,
+	TArray<FString>& OutRecorded)
+{
+	// The package saver treats only PKG_EditorOnly as editor-only, so every Control Rig Blueprint saves its
+	// UncookedOnly imports as Game. The cook strips the UBlueprint (UBlueprint::NeedsLoadForClient and
+	// NeedsLoadForServer return false), so those imports are recorded, not failed. Inferred from engine
+	// code: the first #15 cook must show the cooked package imports none of them.
+	const bool bBlueprintPackage = IsBlueprintClassPackage(Package);
+	TArray<FString> Failures;
+	for (const TArray<FString>* RuntimeDependencies : { &Package.HardDependencies, &Package.SoftDependencies })
+	{
+		for (const FString& Dependency : *RuntimeDependencies)
+		{
+			const FAethelnEditorOnlyTarget Target = ClassifyTarget(Dependency);
+			if (Target.Reason.IsEmpty())
+			{
+				continue;
+			}
+			if (bBlueprintPackage && Target.bUncookedOnlyScript)
+			{
+				OutRecorded.Add(FString::Printf(TEXT("UBlueprint-class package runtime dependency '%s' recorded: %s, and the cook strips the UBlueprint"), *Dependency, *Target.Reason));
+			}
+			else
+			{
+				Failures.Add(FString::Printf(TEXT("editor-only runtime dependency '%s' is prohibited: %s"), *Dependency, *Target.Reason));
+			}
+		}
+	}
+	Failures.Sort();
+	OutRecorded.Sort();
+	return Failures;
+}
+
+TArray<FString> FAethelnContentValidationScanner::SelectBrokenGameReferences(
+	const FAethelnObservedPackage& Package,
+	TFunctionRef<bool(const FString& TargetPackage)> IsGoverned,
+	TArray<FString>& OutRecorded)
 {
 	TArray<FString> Failures;
 	for (const TArray<FString>* RuntimeDependencies : { &Package.HardDependencies, &Package.SoftDependencies })
 	{
 		for (const FString& Dependency : *RuntimeDependencies)
 		{
-			const FString Reason = ClassifyTarget(Dependency);
-			if (!Reason.IsEmpty())
+			if (Dependency.StartsWith(TEXT("/Game/")) && !IsGoverned(Dependency))
 			{
-				Failures.Add(FString::Printf(TEXT("editor-only runtime dependency '%s' is prohibited: %s"), *Dependency, *Reason));
+				Failures.Add(FString::Printf(TEXT("broken or ungoverned /Game dependency '%s'"), *Dependency));
 			}
 		}
 	}
+	// Closed coverage governs every /Game package on disk, so an ungoverned NotGame target is missing
+	// editor or preview content, such as the seven preview packages Issue #100 excluded. It never cooks.
+	for (const FString& Dependency : Package.EditorOnlyDependencies)
+	{
+		if (Dependency.StartsWith(TEXT("/Game/")) && !IsGoverned(Dependency))
+		{
+			OutRecorded.Add(FString::Printf(TEXT("editor-only (NotGame) reference to missing /Game package '%s'"), *Dependency));
+		}
+	}
 	Failures.Sort();
+	OutRecorded.Sort();
 	return Failures;
+}
+
+void FAethelnContentValidationScanner::CollectTextureFacts(
+	const UTexture& Texture,
+	bool bDataValid,
+	const FString& ValidationEvidence,
+	TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts)
+{
+	// A -nullrhi commandlet never caches platform data (FApp::CanEverRender), so the platform size and
+	// mip count read 0. The editor source data is the imported texture; without it the size is unavailable.
+	bool bSourceValid = false;
+	int64 Width = 0;
+	int64 Height = 0;
+	int32 Mips = 0;
+#if WITH_EDITORONLY_DATA
+	bSourceValid = Texture.Source.IsValid();
+	if (bSourceValid)
+	{
+		Width = Texture.Source.GetSizeX();
+		Height = Texture.Source.GetSizeY();
+		Mips = Texture.Source.GetNumMips();
+	}
+#endif
+	const FString TextureEvidence = FString::Printf(
+		TEXT("%s;source=%s;source_width=%lld;source_height=%lld;source_mips=%d;compression=%d;address_x=%d;address_y=%d;virtual_texture_streaming=%s;streaming_method=%d"),
+		*ValidationEvidence, bSourceValid ? TEXT("valid") : TEXT("invalid"), Width, Height, Mips, static_cast<int32>(Texture.CompressionSettings),
+		static_cast<int32>(Texture.GetTextureAddressX()), static_cast<int32>(Texture.GetTextureAddressY()),
+		Texture.VirtualTextureStreaming ? TEXT("true") : TEXT("false"),
+		static_cast<int32>(Texture.GetTextureStreamingMethod()));
+	TMap<FString, int64> SourceSize;
+	TMap<FString, int64> SourceMips;
+	if (bSourceValid)
+	{
+		SourceSize = {{TEXT("width"), Width}, {TEXT("height"), Height}};
+		SourceMips = {{TEXT("width"), Width}, {TEXT("height"), Height}, {TEXT("mip_count"), Mips}};
+	}
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("pbr_channels"), true, TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, SourceSize);
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("tiling"), true, TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("address_x"), static_cast<int64>(Texture.GetTextureAddressX())}, {TEXT("address_y"), static_cast<int64>(Texture.GetTextureAddressY())}});
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("compression"), true, TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("compression_setting"), static_cast<int64>(Texture.CompressionSettings)}});
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("mips"), Texture.IsA<UTexture2D>(), TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, SourceMips);
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("streaming"), true, TextureEvidence + TEXT(";quantitative_policy=TBD"),
+		{{TEXT("virtual_texture_streaming"), Texture.VirtualTextureStreaming != 0}},
+		{{TEXT("streaming_method"), static_cast<int64>(Texture.GetTextureStreamingMethod())}}, {}, {}, true);
+}
+
+void FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(
+	const USkeletalMesh& SkeletalMesh,
+	bool bDataValid,
+	const FString& SkeletalEvidence,
+	TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts)
+{
+	// USkeletalMesh::BodySetup is the transient per-poly body; a skeletal mesh collides through its
+	// PhysicsAsset bodies, recorded exactly as the PhysicsAsset's own collision facts are.
+	const UPhysicsAsset* PhysicsAsset = SkeletalMesh.GetPhysicsAsset();
+	const int32 PhysicsBodies = PhysicsAsset == nullptr ? 0 : PhysicsAsset->SkeletalBodySetups.Num();
+	if (PhysicsBodies > 0)
+	{
+		const FString PhysicsEvidence = FString::Printf(TEXT("%s;collision_source=physics_asset;physics_asset_bodies=%d"), *SkeletalEvidence, PhysicsBodies);
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("profile"), true, PhysicsEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), true}});
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("simple_complex_policy"), true, PhysicsEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), true}},
+			{{TEXT("simple_shape_count"), PhysicsBodies}});
+	}
+	else
+	{
+		const UBodySetup* BodySetup = SkeletalMesh.GetBodySetup();
+		const FString BodyEvidence = SkeletalEvidence + (BodySetup == nullptr ? TEXT(";collision_source=missing") : TEXT(";collision_source=body_setup"));
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("profile"), true, BodyEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}}, {}, {},
+			{{TEXT("profile_name"), BodySetup == nullptr ? FString() : BodySetup->DefaultInstance.GetCollisionProfileName().ToString()}});
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("simple_complex_policy"), true, BodyEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}},
+			{{TEXT("simple_shape_count"), BodySetup == nullptr ? 0 : BodySetup->AggGeom.GetElementCount()}, {TEXT("trace_flag"), BodySetup == nullptr ? -1 : static_cast<int64>(BodySetup->GetCollisionTraceFlag())}});
+	}
+	RecordFacts(OutFacts, TEXT("collision"), TEXT("presentation_equivalence"), true, SkeletalEvidence + TEXT(";quantitative_policy=TBD"),
+		{{TEXT("authoritative_geometry_present"), PhysicsAsset != nullptr}}, {}, {}, {}, true);
 }
 
 FAethelnContentFamilyResult FAethelnContentValidationScanner::EvaluateFamilyFacts(
@@ -2094,7 +2222,8 @@ bool FAethelnContentValidationScanner::ScanLiveRegistry(TArray<FAethelnObservedP
 		}
 		Package.EditorOnlyRuntimeDependencyFailures = SelectEditorOnlyRuntimeDependencyFailures(
 			Package,
-			[&Registry](const FString& TargetPackage) { return ClassifyEditorOnlyTarget(Registry, TargetPackage); });
+			[&Registry](const FString& TargetPackage) { return ClassifyEditorOnlyTarget(Registry, TargetPackage); },
+			Package.RecordedUncookedOnlyDependencies);
 		OutPackages.Add(MoveTemp(Package));
 	}
 	OutPackages.Sort([](const FAethelnObservedPackage& Left, const FAethelnObservedPackage& Right) { return Left.PackageName < Right.PackageName; });
@@ -2254,25 +2383,16 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 		}
 
 		BrokenReferenceFailures.Append(Observed.EditorOnlyRuntimeDependencyFailures);
-		auto ResolveTarget = [&IntakeByPath, &BrokenReferenceFailures](const FString& Dependency) -> const FIntakeAsset*
+		TArray<FString> RecordedReferences = Observed.RecordedUncookedOnlyDependencies;
+		BrokenReferenceFailures.Append(SelectBrokenGameReferences(
+			Observed,
+			[&IntakeByPath](const FString& TargetPackage) { return IntakeByPath.Contains(TargetPackage); },
+			RecordedReferences));
+		auto ResolveTarget = [&IntakeByPath](const FString& Dependency) -> const FIntakeAsset*
 		{
-			if (!Dependency.StartsWith(TEXT("/Game/")))
-			{
-				return nullptr;
-			}
 			const FIntakeAsset* const* Target = IntakeByPath.Find(Dependency);
-			if (Target == nullptr)
-			{
-				BrokenReferenceFailures.Add(FString::Printf(TEXT("broken or ungoverned /Game dependency '%s'"), *Dependency));
-				return nullptr;
-			}
-			return *Target;
+			return Target == nullptr ? nullptr : *Target;
 		};
-		// NotGame (editor-only) references are allowed, but a /Game target must still resolve to governed content.
-		for (const FString& Dependency : Observed.EditorOnlyDependencies)
-		{
-			ResolveTarget(Dependency);
-		}
 		for (const FString& Dependency : Observed.HardDependencies)
 		{
 			const FIntakeAsset* Target = ResolveTarget(Dependency);
@@ -2280,8 +2400,7 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 			{
 				continue;
 			}
-			const TSet<FString>* AllowedTargets = Policy.HardAudienceRules.Find(IntakeAsset.Audience);
-			if (AllowedTargets == nullptr || !AllowedTargets->Contains(Target->Audience))
+			if (!IsHardReferenceAllowed(Policy.HardAudienceRules, IntakeAsset.Audience, Target->Audience))
 			{
 				HardAudienceFailures.Add(FString::Printf(
 					TEXT("hard dependency '%s' crosses prohibited audience boundary %s -> %s"),
@@ -2312,19 +2431,18 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 		VersionFailures.Sort();
 		AudienceFailures.Sort();
 		HardAudienceFailures.Sort();
-		auto RecordReferenceCheck = [&FamilyFacts](const FString& CheckId, const TArray<FString>& Failures)
+		auto RecordReferenceCheck = [&FamilyFacts](const FString& CheckId, const TArray<FString>& Failures, const TArray<FString>& Recorded = {})
 		{
-			RecordFacts(
-				FamilyFacts,
-				TEXT("reference_boundary"),
-				CheckId,
-				true,
-				Failures.IsEmpty() ? TEXT("verified from closed intake and Asset Registry facts") : FString::Join(Failures, TEXT("; ")),
-				{}, {{TEXT("violation_count"), Failures.Num()}});
+			FString Evidence = Failures.IsEmpty() ? TEXT("verified from closed intake and Asset Registry facts") : FString::Join(Failures, TEXT("; "));
+			if (!Recorded.IsEmpty())
+			{
+				Evidence += TEXT("; recorded, not failed: ") + FString::Join(Recorded, TEXT("; "));
+			}
+			RecordFacts(FamilyFacts, TEXT("reference_boundary"), CheckId, true, Evidence, {}, {{TEXT("violation_count"), Failures.Num()}});
 		};
 		RecordReferenceCheck(TEXT("stable_id_unique"), StableIdentityFailures);
 		RecordReferenceCheck(TEXT("redirectors"), RedirectorFailures);
-		RecordReferenceCheck(TEXT("broken_references"), BrokenReferenceFailures);
+		RecordReferenceCheck(TEXT("broken_references"), BrokenReferenceFailures, RecordedReferences);
 		RecordReferenceCheck(TEXT("compatible_content_version"), VersionFailures);
 		RecordReferenceCheck(TEXT("audience_reachability"), AudienceFailures);
 		RecordReferenceCheck(TEXT("hard_reference_exceptions"), HardAudienceFailures);

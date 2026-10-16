@@ -335,9 +335,8 @@ powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
 ```
 
 `-EngineRoot` is an explicit, non-secret local path. The runner defaults to a
-600-second timeout and fails closed unless it discovers and passes exactly
-`Aetheln.Harness.ProjectAndModuleLoad` and
-`Aetheln.GameCombat.NetworkSpike.Authority`. See
+600-second timeout and fails closed unless it discovers and passes exactly the
+`Aetheln.` tests that `Source/` declares (issue #237). See
 [Unreal Automation](unreal-automation.md) for the exact filter, output paths,
 normalized report schema, and all nonzero exit conditions.
 

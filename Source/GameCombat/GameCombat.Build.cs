@@ -8,6 +8,7 @@ public class GameCombat : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
+			"AIModule",
 			"Core",
 			"CoreUObject",
 			"Engine",
@@ -17,6 +18,10 @@ public class GameCombat : ModuleRules
 			"GameplayTasks"
 		});
 
-		PrivateDependencyModuleNames.Add("GameNet");
+		PrivateDependencyModuleNames.AddRange(new string[]
+		{
+			"AssetRegistry",
+			"GameNet"
+		});
 	}
 }

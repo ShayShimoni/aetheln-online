@@ -1,5 +1,8 @@
 #include "AethelnPOCInputComponent.h"
 
+#include "AethelnCombatInputSink.h"
+#include "AethelnGameplayTags.h"
+#include "AethelnHudWidget.h"
 #include "AethelnPOCOverlayWidget.h"
 #include "AethelnPlayerInputReceiver.h"
 #include "Blueprint/UserWidget.h"
@@ -9,6 +12,7 @@
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "InputAction.h"
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
@@ -64,6 +68,14 @@ namespace
 
 		bSuppressNextLookInput = false;
 		return true;
+	}
+
+	/** Instant Strike, Parry, Attack Stance, Defense Stance: the order of the four active actions and keys. */
+	TArray<FGameplayTag> ActiveAbilityIds()
+	{
+		return {
+			AethelnGameplayTags::Ability_Oathscar_InstantStrike.GetTag(), AethelnGameplayTags::Ability_Oathscar_Parry.GetTag(),
+			AethelnGameplayTags::Ability_Oathscar_AttackStance.GetTag(), AethelnGameplayTags::Ability_Oathscar_DefenseStance.GetTag() };
 	}
 
 	FModifyContextOptions BuildPOCMappingContextOptions()
@@ -160,6 +172,37 @@ bool FAethelnPOCControlModeTest::RunTest(const FString& Parameters)
 	return true;
 }
 #endif
+
+FAethelnPrimaryButtonRouter::EAction FAethelnPrimaryButtonRouter::Press(EAethelnPOCControlMode Mode)
+{
+	if (!IsGameplayInputEnabled(Mode))
+	{
+		bConsumed = true;
+		return EAction::Recapture;
+	}
+	return bConsumed ? EAction::None : EAction::Attack;
+}
+
+bool SubmitAbilityPress(APlayerController* Controller, FGameplayTag AbilityId)
+{
+	IAethelnCombatInputSink* Sink = Controller != nullptr ? Cast<IAethelnCombatInputSink>(Controller->PlayerState.Get()) : nullptr;
+	if (Sink == nullptr)
+	{
+		return false;
+	}
+	Sink->RequestAbilityPress(AbilityId);
+	return true;
+}
+
+bool SubmitPrimaryAttack(APlayerController* Controller)
+{
+	return SubmitAbilityPress(Controller, AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+}
+
+bool RouteActivePress(EAethelnPOCControlMode Mode, APlayerController* Controller, FGameplayTag AbilityId)
+{
+	return IsGameplayInputEnabled(Mode) && SubmitAbilityPress(Controller, AbilityId);
+}
 
 UAethelnPOCInputComponent::UAethelnPOCInputComponent()
 {
@@ -300,6 +343,21 @@ void UAethelnPOCInputComponent::InitializeActions()
 
 	MappingContext->MapKey(JumpAction, EKeys::SpaceBar);
 	MappingContext->MapKey(SprintAction, EKeys::LeftShift);
+
+	// The four representative Oathscar actives (#260 P5), in the order of ActiveAbilityIds(). The key layout is #82's: a key
+	// maps only if one is configured, and none is by default.
+	const FKey ActiveKeys[] = { InstantStrikeKey, ParryKey, AttackStanceKey, DefenseStanceKey };
+	const TCHAR* const ActiveNames[] = { TEXT("IA_POC_InstantStrike"), TEXT("IA_POC_Parry"), TEXT("IA_POC_AttackStance"), TEXT("IA_POC_DefenseStance") };
+	for (int32 Index = 0; Index < static_cast<int32>(UE_ARRAY_COUNT(ActiveKeys)); ++Index)
+	{
+		UInputAction* Action = NewObject<UInputAction>(this, ActiveNames[Index], RF_Transient);
+		Action->ValueType = EInputActionValueType::Boolean;
+		ActiveActions.Add(Action);
+		if (ActiveKeys[Index].IsValid())
+		{
+			MappingContext->MapKey(Action, ActiveKeys[Index]);
+		}
+	}
 }
 
 void UAethelnPOCInputComponent::BindReceiver()
@@ -343,12 +401,19 @@ void UAethelnPOCInputComponent::BindReceiver()
 	BindAction(MoveRightAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleMoveRightStopped);
 	BindAction(ToggleControlModeAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleToggleControlMode);
 	BindAction(ViewportRecaptureAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleViewportRecapture);
+	BindAction(ViewportRecaptureAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleViewportRecaptureReleased);
+	BindAction(ViewportRecaptureAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleViewportRecaptureReleased);
 	BindAction(JumpAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleJumpStarted);
 	BindAction(JumpAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleJumpStopped);
 	BindAction(JumpAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleJumpCanceled);
 	BindAction(SprintAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleSprintStarted);
 	BindAction(SprintAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleSprintStopped);
 	BindAction(SprintAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleSprintStopped);
+	const TArray<FGameplayTag> ActiveIds = ActiveAbilityIds();
+	for (int32 Index = 0; Index < ActiveActions.Num(); ++Index)
+	{
+		BindAction(ActiveActions[Index], ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleActivePress, ActiveIds[Index]);
+	}
 	bBindingsApplied = true;
 }
 
@@ -389,6 +454,14 @@ void UAethelnPOCInputComponent::ActivateLocalPlayerResources()
 			OverlayWidget->AddToPlayerScreen();
 		}
 	}
+	if (HudWidget == nullptr)
+	{
+		HudWidget = CreateWidget<UAethelnHudWidget>(PlayerController, UAethelnHudWidget::StaticClass());
+		if (HudWidget != nullptr)
+		{
+			HudWidget->AddToPlayerScreen();
+		}
+	}
 
 	ApplyControlMode(ControlMode);
 }
@@ -423,6 +496,11 @@ void UAethelnPOCInputComponent::ReleaseLocalPlayerResources()
 		OverlayWidget->RemoveFromParent();
 		OverlayWidget = nullptr;
 	}
+	if (HudWidget != nullptr)
+	{
+		HudWidget->RemoveFromParent();
+		HudWidget = nullptr;
+	}
 	AppliedPlayerController.Reset();
 }
 
@@ -438,6 +516,7 @@ void UAethelnPOCInputComponent::ResetGameplayInputState()
 	bMoveBackwardHeld = false;
 	bMoveLeftHeld = false;
 	bMoveRightHeld = false;
+	PrimaryButton.Release();
 	SetComponentTickEnabled(false);
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
@@ -666,10 +745,32 @@ void UAethelnPOCInputComponent::HandleToggleControlMode(
 void UAethelnPOCInputComponent::HandleViewportRecapture(
 	const FInputActionValue& Value)
 {
-	if (!IsGameplayInputEnabled(ControlMode))
+	switch (PrimaryButton.Press(ControlMode))
 	{
+	case FAethelnPrimaryButtonRouter::EAction::Recapture:
 		ApplyControlMode(EAethelnPOCControlMode::Reticle);
+		break;
+	case FAethelnPrimaryButtonRouter::EAction::Attack:
+	{
+		const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+		SubmitPrimaryAttack(OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr);
+		break;
 	}
+	case FAethelnPrimaryButtonRouter::EAction::None:
+		break;
+	}
+}
+
+void UAethelnPOCInputComponent::HandleViewportRecaptureReleased(
+	const FInputActionValue& Value)
+{
+	PrimaryButton.Release();
+}
+
+void UAethelnPOCInputComponent::HandleActivePress(const FInputActionValue& Value, FGameplayTag AbilityId)
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	RouteActivePress(ControlMode, OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr, AbilityId);
 }
 
 void UAethelnPOCInputComponent::HandleJumpStarted(const FInputActionValue& Value)

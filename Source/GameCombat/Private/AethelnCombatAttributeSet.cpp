@@ -105,9 +105,9 @@ void UAethelnCombatAttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProp
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	// Owner-only fails closed; #61 decides later what opponents may see.
-	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, Health, COND_OwnerOnly, REPNOTIFY_Always);
-	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, MaxHealth, COND_OwnerOnly, REPNOTIFY_Always);
+	// Owner decision (#61, 2026-10-12): Health is visible to everyone; Endurance and Guard stay owner-only.
+	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, Health, COND_None, REPNOTIFY_Always);
+	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, MaxHealth, COND_None, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, Endurance, COND_OwnerOnly, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, MaxEndurance, COND_OwnerOnly, REPNOTIFY_Always);
 	DOREPLIFETIME_CONDITION_NOTIFY(UAethelnCombatAttributeSet, Guard, COND_OwnerOnly, REPNOTIFY_Always);

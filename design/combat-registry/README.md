@@ -26,16 +26,22 @@ means:
 | Implementation Ready | The definition has explicit finite root work and finite budgets, plus the required owning evidence and implementation review. |
 | Superseded | A same-kind active definition replaces this ID. It cannot remain a dependency of active definitions. |
 
-The initial registry contains 29 definitions: eight shared resource and damage
-semantics plus the 21 Oathscar identities in the merged canonical documents.
+The registry contains 28 definitions: eight shared resource and damage
+semantics plus the 20 Oathscar identities in the merged canonical documents.
 The later Order and Heritage design corpus remains deferred; the full schema
 vocabulary and validator contracts are covered by fixture-only synthetic data.
 Only Health, Endurance, active Guard, Wrought, the
-sword-and-shield discipline, its three-hit chain, and its three named active
-abilities have Prototype Candidate maturity. The other 20 definitions remain
-Canonical Intent. In particular, Oathbreak's spend, eligibility, grant
-suppression, and refund behavior are not defined by this registry.
-The nine approved Prototype Candidate IDs are pinned independently in the
+sword-and-shield discipline, its three-hit chain, and the ability records of
+its three representative actives (Instant Strike, Parry, and the two Stance
+casts) have Prototype Candidate maturity. The three earlier actives (Gate Step,
+Sworn Rebuke, Hold the Line) are Superseded by them (owner, 2026-10-13, issue
+#260). The other 15 definitions remain Canonical Intent. In particular,
+Oathbreak's spend, eligibility, grant suppression, and refund behavior are not
+defined by this registry. The five Skein records tied to the earlier actives
+were removed rather than marked Superseded, because they have no same-kind
+replacement yet; canon lists their set-aside IDs, which the registry tests pin
+as absent.
+The ten approved Prototype Candidate IDs are pinned independently in the
 validator. Editing the schema's allowlist alone cannot promote another record.
 The validator requires syntactically bounded evidence declarations for promoted
 records; it cannot independently establish that the linked evidence proves a

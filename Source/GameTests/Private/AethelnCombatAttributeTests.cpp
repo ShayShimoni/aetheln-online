@@ -59,9 +59,25 @@ bool FAethelnAttributeReplicationPolicyTest::RunTest(const FString& Parameters)
 	TArray<FLifetimeProperty> LifetimeProperties;
 	GetDefault<UAethelnCombatAttributeSet>()->GetLifetimeReplicatedProps(LifetimeProperties);
 
-	int32 ReplicatedAttributeCount = 0;
-	for (const TCHAR* Name : { TEXT("Health"), TEXT("MaxHealth"), TEXT("Endurance"), TEXT("MaxEndurance"), TEXT("Guard"), TEXT("MaxGuard") })
+	// Owner decision (#61, 2026-10-12): Health is visible to everyone; Endurance and Guard stay owner-only.
+	struct FExpectedCondition
 	{
+		const TCHAR* Name;
+		ELifetimeCondition Condition;
+	};
+	const FExpectedCondition ExpectedConditions[] = {
+		{ TEXT("Health"), COND_None },
+		{ TEXT("MaxHealth"), COND_None },
+		{ TEXT("Endurance"), COND_OwnerOnly },
+		{ TEXT("MaxEndurance"), COND_OwnerOnly },
+		{ TEXT("Guard"), COND_OwnerOnly },
+		{ TEXT("MaxGuard"), COND_OwnerOnly },
+	};
+
+	int32 ReplicatedAttributeCount = 0;
+	for (const FExpectedCondition& Expected : ExpectedConditions)
+	{
+		const TCHAR* Name = Expected.Name;
 		const FProperty* Property = FindFProperty<FProperty>(UAethelnCombatAttributeSet::StaticClass(), Name);
 		if (!TestNotNull(*FString::Printf(TEXT("%s is a reflected property"), Name), Property))
 		{
@@ -74,7 +90,7 @@ bool FAethelnAttributeReplicationPolicyTest::RunTest(const FString& Parameters)
 			continue;
 		}
 		++ReplicatedAttributeCount;
-		TestTrue(*FString::Printf(TEXT("%s replicates to the owner only"), Name), LifetimeProperty->Condition == COND_OwnerOnly);
+		TestTrue(*FString::Printf(TEXT("%s replicates with its decided condition"), Name), LifetimeProperty->Condition == Expected.Condition);
 		TestTrue(*FString::Printf(TEXT("%s always fires its RepNotify"), Name), LifetimeProperty->RepNotifyCondition == REPNOTIFY_Always);
 	}
 	TestEqual(TEXT("All six attributes replicate"), ReplicatedAttributeCount, 6);

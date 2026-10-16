@@ -108,11 +108,24 @@ function New-TestUnrealReport {
 		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
 		[pscustomobject][ordered]@{fullTestPath='Aetheln.Harness.ProjectAndModuleLoad';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0}
 	)
-	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=2;passed=2;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=2;passed=2;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+}
+
+# Synthetic until the first live launcher run replaces it: one governed asset with the launcher's report field inventory
+# and the scanner's six reference_boundary checks; the other seven families are omitted because the receipt does not claim them.
+function New-TestContentReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs and returns an in-memory content-validation-report fixture without changing external state.')]
+	param()
+	$Checks = @('audience_reachability','broken_references','compatible_content_version','hard_reference_exceptions','redirectors','stable_id_unique') | ForEach-Object { [pscustomobject][ordered]@{check_id=$_;applicability='applicable';deterministic_status='passed';promotion_status='eligible';evidence='fixture'} }
+	$Asset = [pscustomobject][ordered]@{asset_path='/Game/Fixture/Asset0';stable_id='fixture.asset.0';content_version=1;audience='shared';lifecycle_state='temporary_prototype';provenance=[pscustomobject][ordered]@{author_or_provider='fixture'};lifecycle_evidence=[pscustomobject][ordered]@{content_identity='fixture'};family_results=@([pscustomobject][ordered]@{policy_id='reference_boundary';applicability='applicable';deterministic_status='passed';promotion_status='eligible';evidence='fixture';check_results=@($Checks)})}
+	$Artifact = [pscustomobject][ordered]@{path='Binaries/Win64/AethelnOnlineEditor.target';size_bytes=1;sha256=('b'*64);build_id='fixture'}
+	$Execution = [pscustomobject][ordered]@{repository_clean=$true;engine_revision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';engine_tag='5.8.1-release';engine_binary_sha256=('3'*64);build_version_sha256=('4'*64);target='AethelnOnlineEditor';platform='Win64';configuration='Development';editor_build_command_sha256=('5'*64);editor_build_log_sha256=('6'*64);compiler_version='14.44.35228';compiler_sha256=('7'*64);resource_compiler_version='10.0.26100.0';resource_compiler_sha256=('8'*64);target_receipt=$Artifact;module_manifest=$Artifact;loaded_project_modules=@($Artifact,$Artifact);project_sha256=('1'*64);policy_sha256=('0'*64);intake_sha256=('2'*64);invocation_sha256=('a'*64);registry_source='live_asset_registry'}
+	return [pscustomobject][ordered]@{schema_id='aetheln.content-validation-report';schema_version=2;revision=('c'*40);engine_identity='5.8.1-release@71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';policy_sha256=('0'*64);intake_sha256=('2'*64);execution_provenance=$Execution;audience='all';started_utc='2026-10-05T00:00:00.0000000Z';finished_utc='2026-10-05T00:00:01.000Z';command='fixture';counts=[pscustomobject][ordered]@{assets=1;findings=0;errors=0;non_promotion=0};assets=@($Asset);findings=@();result='passed'}
 }
 
 function Get-PublisherCaseDefinition([string] $ProducerKey) {
 	switch ($ProducerKey) {
+		'content' { return @{ checks=@('content-reference-validation'); name='content-validation-report.json'; job='content-receipt-shadow'; report=(New-TestContentReport) } }
 		'portable' { return @{ checks=@('portable'); name='ci-report.json'; job='portable-receipt-shadow'; report=(New-TestPortableReport) } }
 		'native' { return @{ checks=@('native-client-server-compile'); name='engine-runner-report.json'; job='native-receipt-shadow'; report=(New-TestNativeReport) } }
 		'unreal' { return @{ checks=@('unreal-editor-automation'); name='unreal-automation-report.json'; job='unreal-receipt-shadow'; report=(New-TestUnrealReport) } }
@@ -149,7 +162,7 @@ function Invoke-PublisherFixture($Fixture) {
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-receipt-publisher-' + [guid]::NewGuid().ToString('N'))
 try {
 	[void] (New-Item -ItemType Directory -Path $FixtureRoot)
-	foreach ($ProducerKey in @('portable','native','unreal','visual')) {
+	foreach ($ProducerKey in @('content','portable','native','unreal','visual')) {
 		$Case = New-PublisherFixture -Root (Join-Path $FixtureRoot $ProducerKey) -ProducerKey $ProducerKey
 		$CheckId = $Case.Selection[0]
 		$Published = Invoke-PublisherFixture $Case
@@ -163,8 +176,8 @@ try {
 		Assert-True ((Get-PublisherSha256 (Join-Path $Case.OutputRoot $Case.EvidenceName)) -ceq $Case.EvidenceSha256) "The $CheckId receipt archive must preserve exact evidence bytes."
 		if ($CheckId -ceq 'native-client-server-compile') {
 			Assert-True ($Receipt.results.checks[0].nativeExitCode -eq 0 -and $Receipt.results.checks[0].cleanupVerified) 'Native receipt must bind zero exit and verified cleanup.'
-		} elseif ($CheckId -ceq 'unreal-editor-automation') {
-			# The harness exits zero only after both frozen tests pass; it owns no cleanup proof.
+		} elseif ($CheckId -cin @('unreal-editor-automation','content-reference-validation')) {
+			# The harness and the content launcher exit zero only after their reports pass; neither owns a cleanup proof.
 			Assert-True ($Receipt.results.checks[0].nativeExitCode -eq 0 -and $null -eq $Receipt.results.checks[0].cleanupVerified -and $null -eq $Receipt.acceptance.cleanupVerified) 'Unreal receipt must bind zero exit without inventing cleanup evidence.'
 		} else {
 			Assert-True ($null -eq $Receipt.results.checks[0].nativeExitCode -and $null -eq $Receipt.results.checks[0].cleanupVerified) "$CheckId must not invent native or cleanup evidence."
@@ -260,6 +273,15 @@ try {
 	$FailedUnreal.EvidenceSha256 = Get-PublisherSha256 $FailedUnreal.EvidencePath
 	$FailedUnreal.EvidenceSizeBytes = [long](Get-Item $FailedUnreal.EvidencePath).Length
 	Assert-Rejected { Invoke-PublisherFixture $FailedUnreal } 'receipt_semantic_evidence_invalid:unreal-editor-automation'
+
+	# A content report with a failed reference_boundary check can never become a content receipt.
+	$FailedContent = New-PublisherFixture -Root (Join-Path $FixtureRoot 'failed-content') -ProducerKey content
+	$FailedContentReport = New-TestContentReport
+	$FailedContentReport.assets[0].family_results[0].check_results[1].deterministic_status = 'failed'
+	[IO.File]::WriteAllText($FailedContent.EvidencePath, (($FailedContentReport | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
+	$FailedContent.EvidenceSha256 = Get-PublisherSha256 $FailedContent.EvidencePath
+	$FailedContent.EvidenceSizeBytes = [long](Get-Item $FailedContent.EvidencePath).Length
+	Assert-Rejected { Invoke-PublisherFixture $FailedContent } 'receipt_semantic_evidence_invalid:content-reference-validation'
 
 	$OversizedEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'oversized-evidence') -ProducerKey visual
 	$EvidenceStream = New-Object IO.FileStream($OversizedEvidence.EvidencePath, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -399,6 +421,8 @@ $ProvableChecks = [string[]] @($script:PublisherContracts.Values | ForEach-Objec
 [Array]::Sort($ProvableChecks, [StringComparer]::Ordinal)
 $PendingChecks = [string[]] @($script:PublisherCheckIds | Where-Object { $ProvableChecks -cnotcontains $_ })
 [Array]::Sort($PendingChecks, [StringComparer]::Ordinal)
+# Producer 4 made content-reference-validation live; producer 5 (clean-package-provenance-smoke) is the only pending obligation.
+Assert-True (($PendingChecks -join ',') -ceq 'clean-package-provenance-smoke') "Only clean-package-provenance-smoke may stay pending, found ($($PendingChecks -join ','))."
 $WorkflowLiveChecks = Get-SourceCheckList -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'))) -Pattern '(?m)^\s*\$LiveProducerChecks = @\((?<list>[^)]*)\)\r?$' -Name 'The workflow selector job ($LiveProducerChecks)'
 $BuilderLiveChecks = Get-SourceCheckList -Source $ContextSource -Pattern '(?m)^\s*\$LiveChecks=@\((?<list>[^)]*)\)\r?$' -Name 'The aggregate context builder ($LiveChecks)'
 $AggregateSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiAcceptanceAggregate.ps1'))

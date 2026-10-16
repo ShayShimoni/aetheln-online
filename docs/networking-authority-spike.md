@@ -250,10 +250,12 @@ not published in version-2 evidence. Successful evidence sets
 `PerformanceContractPath` is a separate opt-in input owned by
 [Issue #45](https://github.com/ShayShimoni/aetheln-online/issues/45). It may be
 supplied with or without the Issue #44 scenario/profile contracts, and calls
-that omit it retain the existing version-1 and version-2 interfaces and
-evidence shapes unchanged. The contract is a closed, versioned JSON object with
-schema `aetheln.performance-capture-contract` version 1 containing exactly one
-`capture` object and one `budgets` array.
+that omit it retain the existing Issue #44 version-1 and version-2
+interfaces and evidence shapes unchanged. The contract is a closed, versioned JSON object with
+schema `aetheln.performance-capture-contract` version 1 or 2 containing exactly
+one `capture` object and one `budgets` array. `schema_version` must be the JSON
+integer 1 or 2 and selects the metric set below; version 1 contracts remain
+accepted unchanged.
 
 The `capture` object binds future performance evidence to the exact run
 identity. Its `source_revision`, `build`, `toolchain`, `hardware`, `topology`,
@@ -264,9 +266,9 @@ contracts are supplied, `scenario_version`, `profile_version`, and
 `profile_arguments_sha256` must bind the exact selected versions and opaque
 argument digest; without those contracts, all three fields must be JSON `null`.
 `evidence_references` must be a non-empty array of unique
-whitespace-free tokens. `measurement_domains` must declare exactly the three
-version-1 network-authority-runner subset domains with exactly these ordered
-metrics:
+whitespace-free tokens. For version 1, `measurement_domains` must declare
+exactly the three network-authority-runner subset domains with exactly these
+ordered metrics:
 
 - `client`: `client_memory_bytes`, `correction_count`,
   `correction_magnitude_centimeters`
@@ -277,17 +279,54 @@ metrics:
   `aggregate_bandwidth_bits_per_second`
 
 This ten-metric subset is limited to fields the current network-authority
-runner can bind. It does not replace or complete Issue #45's full performance
-budget registry, which still requires client game/render/GPU timing, frame
-pacing and hitches, loading and streaming, server worker and tick-overrun
-behavior, failure shape, and network send/receive bursts and loss impact.
+runner can bind.
+
+For contract version 2, `measurement_domains` must declare exactly the four domains
+`client`, `loading_streaming`, `server`, and `network`. Each version-1 metric
+keeps its place first in its domain, and these metric names are appended in
+this order. The names are proposals pending owner review. They are declared, not
+bound: this runner cannot capture most of them yet. They carry no value, unit
+conversion, statistic, threshold, or target:
+
+- `client`: `client_frame_time_milliseconds`,
+  `client_game_thread_milliseconds`, `client_render_thread_milliseconds`,
+  `client_gpu_milliseconds`, `client_frame_pacing_milliseconds`,
+  `client_hitch_count`, `client_hitch_duration_milliseconds`
+- `loading_streaming`: `client_startup_milliseconds`,
+  `client_travel_milliseconds`, `client_map_load_milliseconds`,
+  `client_streaming_stall_count`, `client_streaming_stall_milliseconds`
+- `server`: `server_tick_duration_milliseconds`,
+  `server_tick_overrun_count`, `server_tick_overrun_milliseconds`,
+  `server_worker_task_milliseconds`
+- `network`: `network_send_burst_bits_per_second`,
+  `network_receive_burst_bits_per_second`
+
+Contract version 2 therefore declares 28 metrics. Packet-loss impact has no
+dedicated metric: loss is a network-profile input, and its impact is observed
+through the existing `correction_count`, `correction_magnitude_centimeters`,
+and bandwidth metrics captured under a loss profile. These remain open
+decisions, none of which this contract resolves:
+
+- which statistic (median, percentile, worst case, or variance) each timing
+  metric reports, including `client_frame_pacing_milliseconds`;
+- the definitions that the hitch, streaming-stall, and tick-overrun counters
+  and durations depend on (a hitch threshold, a stall threshold, and the server
+  tick rate), none of which is set while `server_tick_hz` stays `null`;
+- the overload failure shape, a non-numeric evidence field to define later,
+  which is therefore not part of the numeric budget set;
+- whether a dedicated packet-loss-impact outcome metric is needed beyond the
+  correction and bandwidth metrics.
+
+Neither version completes Issue #45's full performance budget registry: the replication,
+detailed client and server memory, backend, persistence, and build/cook
+registry domains are not covered.
 
 The `sampling` object must declare `sampling_rate_hz`, `server_tick_hz`,
 `bandwidth_limit_kbps`, and `capacity_players`, and every one of those values
 must remain JSON `null` in this wave.
 
-The `budgets` array must contain exactly one closed record per version-1
-network-authority-runner subset metric with `metric_id`, `domain`, `target`,
+The `budgets` array must contain exactly one closed record per metric of the
+declared version, with `metric_id`, `domain`, `target`,
 `warning_threshold`,
 `failure_threshold`, `measurement_method`, `scenario_id`, `owner`,
 `evidence_references`, `evidence_classification`, and `approval_status`.
@@ -306,8 +345,8 @@ duplicate JSON properties, missing or extra fields, unknown or duplicate
 metrics, mismatched identities, populated numeric values, undeclared
 evidence references, and self-approved budgets all fail closed before any
 process launch. A validated contract adds one `performance_contract` summary
-to the evidence document containing only the schema identity, the version-1
-network-authority-runner measurement subset, the SHA-256 and fixed artifact
+to the evidence document containing only the schema identity and declared
+version (1 or 2), that version's measurement domains, the SHA-256 and fixed artifact
 name of the exact validated
 contract bytes, the budget count, `targets_defined = false`, `approval_status =
 "unapproved"`, the evidence-reference count, and classification counts. Those
@@ -577,14 +616,66 @@ gate was skipped because that module was unavailable. These results validate
 the bounded source and orchestration baseline only; they are not packaged
 multiplayer evidence.
 
+### Packaged two-client capture (PR #129)
+
+PR [#129](https://github.com/ShayShimoni/aetheln-online/pull/129) delivered one
+genuine packaged authority capture. The facts below come from the merged PR and
+the repository owner's PR and Issue #2 comments.
+
+- **Source revision:** the exact PR head
+  `9c960497c7bae7bfee5bfb0d36eb3e2101849980`, merged into `develop` as
+  `74bd706a15c7f7be631d564e60762ac302408321` (`74bd706a`). The merge tree and
+  the tested PR-head tree are identical.
+- **Topology:** one Linux dedicated server and two Windows clients, from one
+  clean Windows-client/Linux-server package (87 files independently rehashed,
+  5,622,769,752 bytes).
+- **Covered results:** authoritative movement, enemy spawn, server-resolved
+  melee and damage, join-in-progress, disconnect, and fresh-identity reconnect.
+  The capture also contained exactly eight genuine invalid-claim rejections
+  (movement, aim, activation, hit, cooldown, dodge, block, and damage). That
+  capture predates the current ten-probe contract: at `74bd706a` the runner
+  required these eight probes, and later changes for Issues #38 and #44
+  (commits `186b4f8` and `997ceeb`) moved the contract to the ten described
+  above. The 30-second post-reconnect interval completed (30.932 s), logs drained, stderr
+  stayed empty, no Windows or WSL game process remained, and a bounded
+  sensitive-pattern scan found zero matches.
+- **Artifact hashes (SHA-256):**
+  - schema-v2 build provenance
+    `34bbebb6592a036d312fa78436a236be5c2220ec40e552a299c0b89921a09b88`
+  - capture evidence
+    `c1546581c5890266d47ef003a0b87f865785825176228e800ac9c69455f954a0`
+  - composite candidate
+    `5c70ee9bdc1c63876ca2c03f55efabac58c63f1c171a1f72ab8240b915893dec`
+  - post-merge QA handoff
+    `992acc755d96a0420472cda1b9da2b312350356a5c5fc6dca90d16b9ae423b17`
+  - accepted post-merge QA manifest
+    `483c045c34cb9f9924749c39b37f0ce24b86d7245fb25dfd532a0aa3d6b6ce3e`
+- **Post-merge gate:** workflow run `31952847659` passed `quality-gates` on the
+  merge commit, and fresh independent post-merge QA passed all five bounded
+  criteria.
+
+The original provenance recorded a null engine Git field. It was supplemented,
+without rebuilding or changing package bytes, with the pinned engine tag
+`5.8.1-release` at commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`. The
+owner's PR #129 comments record that the fresh restricted verifier, reviewer,
+and approver stages passed. Under the runner contract above, packaged mode
+produces only `packaged-candidate`, so the result needed those stages.
+
+The scenario code drives the neutral present-time baseline only. By the
+contract above, this capture carries no measured latency, jitter, loss, tick,
+history, bandwidth, or capacity value, and it does not compare candidates.
+
 ### Not yet performed
 
-No real packaged dedicated-server-plus-two-client gameplay capture is claimed
-by this unit or by the Issue #44 fixture contract. The fixture uses a fake process that
-emits expected log records; it validates orchestration and evidence handling,
-not Unreal networking, replicated gameplay, combat feel, latency tolerance, or
-packaged lifecycle behavior. A packaged run and its correlated raw logs and
-JSON evidence remain required before Issue #2 can close.
+The Issue #44 fixture contract and unit 1 do not claim packaged gameplay on
+their own: the fixture uses a fake process that emits expected log records and
+validates orchestration and evidence handling, not Unreal networking,
+replicated gameplay, combat feel, latency tolerance, or packaged lifecycle
+behavior. The PR #129 capture above is the only packaged
+dedicated-server-plus-two-client capture. Issue #2 stays open for the remaining
+work listed under Continuation Ownership. That includes packaged captures for
+equivalent generic push-model, Replication Graph, and Iris candidates and the
+bounded-rewind comparison, each with correlated raw logs and JSON evidence.
 
 All numeric network conditions, measurements, budgets, thresholds, tick rates,
 history windows, bandwidth limits, and capacity values remain explicitly
@@ -592,7 +683,17 @@ history windows, bandwidth limits, and capacity values remain explicitly
 unselected. Present-time melee is only the implemented baseline used to expose
 the comparison seam; it is not the final selected latency policy. Bounded
 rewind and the remaining projectile, block, and dodge coverage are not
-implemented by this unit. No entry in
+implemented by this unit.
+
+The `NotImplemented` projectile, block, dodge, and bounded-rewind rows of
+`FAethelnNetworkSpikeActorMix` (`AethelnNetworkSpikeEvidence.h`, lines 98-104)
+describe only this spike's own actor mix, meaning the capabilities its
+comparison scenario exercises. They do not describe the product dodge and block
+code, which Issue #18 owns under [Dodge and Block](dodge-and-block.md). The
+packaged capture's `dodge` and `block` rejections are invalid-claim probes
+against the neutral spike authority; they do not exercise that product code.
+
+No entry in
 [Architecture Decisions](architecture-decisions.md) is added or changed.
 
 ## Continuation Ownership

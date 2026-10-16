@@ -8,6 +8,7 @@
 #include "AethelnDodgeAbility.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnObservability.h"
+#include "AethelnOathscarAbilities.h"
 #include "AethelnObservabilitySubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -841,11 +842,12 @@ void UAethelnAbilitySystemComponent::ApplyDueBoundaries(double Now)
 {
 	ApplyChainBoundaries(Now);
 	ApplyDodgeBoundaries(Now);
+	ApplyParryBoundaries(Now);
 }
 
 bool UAethelnAbilitySystemComponent::HasPendingBoundaries() const
 {
-	return ChainState.bExists || DodgeWindow.bOpen;
+	return ChainState.bExists || DodgeWindow.bOpen || ParryWindow.bOpen;
 }
 
 bool UAethelnAbilitySystemComponent::OpenDodgeWindow(const UAethelnDodgeAbility& Ability, FGameplayAbilitySpecHandle Handle)
@@ -1075,6 +1077,16 @@ void UAethelnAbilitySystemComponent::ServerSetReplicatedEventWithPayload_Impleme
 	RefuseStockRoute();
 }
 
+void UAethelnAbilitySystemComponent::ServerPrintDebug_Request_Implementation()
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerPrintDebug_RequestWithStrings_Implementation(const TArray<FString>& Strings)
+{
+	RefuseStockRoute();
+}
+
 void UAethelnAbilitySystemComponent::OnUnregister()
 {
 	ResetChain(EAethelnChainEndReason::AvatarLost);
@@ -1134,6 +1146,7 @@ bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& 
 		ChainState.Handle = Handle;
 		ChainState.Ability = &Ability;
 		ChainState.Definitions = Ability.ProvisionalSteps; // immutable for this chain
+		ChainState.CommitmentTag = Ability.GetCommitmentTag();
 		BindChainResetTags(Ability.ResetTags);
 		ActiveSeamScope->bChainReady = StartChainStep(Input, 1, Input.ReceiptServerTime);
 		if (!ActiveSeamScope->bChainReady && ChainState.bExists && ChainState.Handle == Handle
@@ -1145,7 +1158,7 @@ bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& 
 		}
 		return ActiveSeamScope->bChainReady;
 	}
-	if (ChainState.bWaiting || ChainState.Step >= 3) { return false; }
+	if (ChainState.bWaiting || ChainState.Step >= ChainState.Definitions.Num()) { return false; }
 	const FAethelnAttackStepDefinition& Previous = ChainState.Definitions[ChainState.Step - 1];
 	const double LinkOpen = ChainState.StartTime + Previous.LinkOpen;
 	if (Input.ReceiptServerTime < LinkOpen)
@@ -1160,13 +1173,14 @@ bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& 
 	return ActiveSeamScope->bChainReady;
 }
 
-bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime)
+bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime, bool bHoldRecord)
 {
 	UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline();
 	UAethelnBasicChainAbility* Ability = ChainState.Ability.Get();
 	AActor* Avatar = GetAvatarActor();
+	// A held record lives only inside one pass; no later step may overtake it (records stay in start order).
 	if (!ChainState.bExists || Ability == nullptr || Timeline == nullptr || Avatar == nullptr || Avatar->IsActorBeingDestroyed()
-		|| Step < 1 || Step > ChainState.Definitions.Num() || !FMath::IsFinite(StartTime)) { return false; }
+		|| Step < 1 || Step > ChainState.Definitions.Num() || !FMath::IsFinite(StartTime) || ChainState.HeldRecord.ActivationId.IsValid()) { return false; }
 	// Tag delegates can synchronously reset or replace the chain and free its definitions.
 	const FAethelnAttackStepDefinition Definition = ChainState.Definitions[Step - 1];
 	const FAethelnServerChainState Previous = ChainState;
@@ -1180,12 +1194,13 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	Record.Windows.BufferOpen = Definition.BufferOpen; Record.Windows.LinkOpen = Definition.LinkOpen;
 	Record.Windows.LinkClose = Definition.LinkClose; Record.Windows.RecoveryEnd = Definition.RecoveryEnd;
 	Record.Windows.CancelOpen = Definition.CancelOpen;
+	Record.Windows.InterruptibleUntil = Definition.InterruptibleUntil;
 	if (!Timeline->RegisterStep(*this, Definition, Record, Ability->ProvisionalMaxSampleDistance, Ability->ProvisionalMaxSampleAngleDegrees)) { return false; }
 	if (ChainState.CurrentInput.ActivationId.IsValid()) { Timeline->StampReset(ChainState.CurrentInput.ActivationId, StartTime); }
 	if (ChainState.bCommitmentHeld)
 	{
 		ChainState.bCommitmentHeld = false;
-		RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+		RemoveLooseGameplayTag(Previous.CommitmentTag);
 	}
 	if (!ChainState.bExists || ChainState.Handle != Previous.Handle || ChainState.Ability.Get() != Ability
 		|| ChainState.Step != Previous.Step || ChainState.CurrentInput.ActivationId != Previous.CurrentInput.ActivationId
@@ -1198,7 +1213,7 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	ChainState.Step = Step; ChainState.StartTime = StartTime; ChainState.CurrentInput = Input;
 	ChainState.bWaiting = false; ChainState.BufferedInput = FAethelnAcceptedAttackInput();
 	ChainState.bCommitmentHeld = Definition.CancelOpen > 0.0;
-	if (ChainState.bCommitmentHeld) { AddLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); }
+	if (ChainState.bCommitmentHeld) { AddLooseGameplayTag(ChainState.CommitmentTag); }
 	if (!ChainState.bExists || ChainState.Handle != Previous.Handle || ChainState.Ability.Get() != Ability
 		|| ChainState.Step != Step || ChainState.CurrentInput.ActivationId != Input.ActivationId)
 	{
@@ -1210,18 +1225,29 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	AttackPresentationState.StartServerTime = StartTime; AttackPresentationState.AcceptedAim = Input.AcceptedAim;
 	AttackPresentationState.ActivationCounter = ++AttackActivationCounter;
 	AttackPresentationState.EndReason = EAethelnChainEndReason::None;
-	ClientCombatActivation(Record);
+	// A pass-started buffered step is announced after the pass resolves contacts: an interruption before
+	// its start means it never started (docs/attack-timeline-and-combo.md, Interruption).
+	if (bHoldRecord) { ChainState.HeldRecord = Record; }
+	else { ClientCombatActivation(Record); }
 	return true;
 }
 
-void UAethelnAbilitySystemComponent::StartBufferedChainStep(double Now)
+void UAethelnAbilitySystemComponent::SendHeldCombatActivation()
+{
+	if (!ChainState.HeldRecord.ActivationId.IsValid()) { return; }
+	const FAethelnCombatActivationRecord Record = ChainState.HeldRecord;
+	ChainState.HeldRecord = FAethelnCombatActivationRecord();
+	ClientCombatActivation(Record);
+}
+
+void UAethelnAbilitySystemComponent::StartBufferedChainStep(double Now, bool bHoldRecord)
 {
 	if (!IsOwnerActorAuthoritative() || !ChainState.bExists || !ChainState.bWaiting || Now < ChainState.BufferedStartTime) { return; }
 	const auto Input = ChainState.BufferedInput;
 	const double Start = ChainState.BufferedStartTime;
 	const FGuid PreviousActivationId = ChainState.CurrentInput.ActivationId;
 	const FGameplayAbilitySpecHandle Handle = ChainState.Handle;
-	if (!StartChainStep(Input, ChainState.Step + 1, Start) && ChainState.bExists && ChainState.Handle == Handle
+	if (!StartChainStep(Input, ChainState.Step + 1, Start, bHoldRecord) && ChainState.bExists && ChainState.Handle == Handle
 		&& ChainState.bWaiting && ChainState.CurrentInput.ActivationId == PreviousActivationId
 		&& ChainState.BufferedInput.ActivationId == Input.ActivationId)
 	{
@@ -1241,7 +1267,7 @@ void UAethelnAbilitySystemComponent::ApplyChainBoundaries(double Now)
 	if (ChainState.bCommitmentHeld && Now >= ChainState.StartTime + Step.CancelOpen)
 	{
 		ChainState.bCommitmentHeld = false;
-		RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+		RemoveLooseGameplayTag(ChainState.CommitmentTag);
 	}
 	if (!ChainState.bExists || ChainState.CurrentInput.ActivationId != ActivationId) { return; }
 	if (!ChainState.bWaiting && Now >= ChainState.StartTime + Step.BufferOpen)
@@ -1250,11 +1276,12 @@ void UAethelnAbilitySystemComponent::ApplyChainBoundaries(double Now)
 	}
 	// GAS end delegates may reset or replace this chain. Do not touch their state.
 	if (!ChainState.bExists || ChainState.CurrentInput.ActivationId != ActivationId) { return; }
-	if (ChainState.Step == 3 && Now >= ChainState.StartTime + Step.RecoveryEnd)
+	const int32 FinalStep = ChainState.Definitions.Num();
+	if (ChainState.Step == FinalStep && Now >= ChainState.StartTime + Step.RecoveryEnd)
 	{
 		ResetChain(EAethelnChainEndReason::Completed, ChainState.StartTime + Step.RecoveryEnd);
 	}
-	else if (ChainState.Step < 3 && !ChainState.bWaiting && Now >= ChainState.StartTime + Step.LinkClose)
+	else if (ChainState.Step < FinalStep && !ChainState.bWaiting && Now >= ChainState.StartTime + Step.LinkClose)
 	{
 		ResetChain(EAethelnChainEndReason::Timeout, ChainState.StartTime + Step.LinkClose);
 	}
@@ -1285,7 +1312,7 @@ void UAethelnAbilitySystemComponent::ResetChain(EAethelnChainEndReason Reason, d
 	AttackPresentationState.EndReason = Reason;
 	if (UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline()) { Timeline->StampReset(Previous.CurrentInput.ActivationId, ResetTime); }
 	UnbindChainResetTags();
-	if (Previous.bCommitmentHeld) { RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); }
+	if (Previous.bCommitmentHeld) { RemoveLooseGameplayTag(Previous.CommitmentTag); }
 	const FGameplayAbilitySpec* CurrentSpec = FindAbilitySpecFromHandle(Previous.Handle);
 	const UAethelnGameplayAbility* CurrentInstance = CurrentSpec != nullptr ? Cast<UAethelnGameplayAbility>(CurrentSpec->GetPrimaryInstance()) : nullptr;
 	if (OriginalActiveOperation.IsValid() && CurrentSpec != nullptr && CurrentSpec->IsActive() && CurrentInstance != nullptr
@@ -1293,6 +1320,8 @@ void UAethelnAbilitySystemComponent::ResetChain(EAethelnChainEndReason Reason, d
 	{
 		CancelAbilityHandle(Previous.Handle);
 	}
+	// A held record goes out before its end if the step started by the reset time; otherwise it never started.
+	if (Previous.HeldRecord.ActivationId.IsValid() && ResetTime >= Previous.HeldRecord.StartServerTime) { ClientCombatActivation(Previous.HeldRecord); }
 	ClientChainEnded(Previous.bWaiting ? Previous.BufferedInput.ActivationId : Previous.CurrentInput.ActivationId, Reason);
 }
 
@@ -1329,6 +1358,11 @@ void UAethelnAbilitySystemComponent::ClientChainEnded_Implementation(const FGuid
 void UAethelnAbilitySystemComponent::MulticastCombatResultCue_Implementation(const FAethelnCombatResultCue& Cue)
 {
 	OnCombatResultCue.Broadcast(Cue);
+}
+
+void UAethelnAbilitySystemComponent::MulticastDeathCue_Implementation()
+{
+	OnDeathCue.Broadcast();
 }
 
 void UAethelnAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -1370,3 +1404,40 @@ bool UAethelnAbilitySystemComponent::HasReplicatedTargetDataForTests(FGameplayAb
 	return AbilityTargetDataMap.Find(FGameplayAbilitySpecHandleAndPredictionKey(Handle, PredictionKey)).IsValid();
 }
 #endif
+
+bool UAethelnAbilitySystemComponent::OpenParryWindow(const FGuid& OperationId, FGameplayAbilitySpecHandle Handle, double EndTime)
+{
+	UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline();
+	// One window per ASC: the instance gate makes an open one unreachable, so fail closed if it exists.
+	if (!OperationId.IsValid() || !FMath::IsFinite(EndTime) || ParryWindow.bOpen || Timeline == nullptr || !Timeline->RegisterNonChainBoundaries(*this)) { return false; }
+	ParryWindow = FAethelnServerParryWindow();
+	ParryWindow.bOpen = true;
+	ParryWindow.OperationId = OperationId;
+	ParryWindow.Handle = Handle;
+	ParryWindow.End = EndTime;
+	return true;
+}
+
+void UAethelnAbilitySystemComponent::CloseParryWindow(const FGuid& OperationId)
+{
+	if (ParryWindow.bOpen && ParryWindow.OperationId == OperationId) { ParryWindow = FAethelnServerParryWindow(); }
+}
+
+void UAethelnAbilitySystemComponent::ApplyParryBoundaries(double Now)
+{
+	if (!IsOwnerActorAuthoritative() || !ParryWindow.bOpen || !FMath::IsFinite(Now) || Now < ParryWindow.End) { return; }
+	// The normal end at WindowEnd. The slot's interval already ends there; this ends the activation and the state tag.
+	const FGuid OperationId = ParryWindow.OperationId;
+	const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(ParryWindow.Handle);
+	UAethelnParryAbility* Instance = Spec != nullptr ? Cast<UAethelnParryAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	if (Instance != nullptr && Instance->ActivationOperationId == OperationId) { Instance->EndAtWindowEnd(); }
+	CloseParryWindow(OperationId);
+}
+
+void UAethelnAbilitySystemComponent::CancelParry()
+{
+	if (!IsOwnerActorAuthoritative()) { return; }
+	// The Parry's cancel path ends its slot, its state tag and its window at this processing time.
+	const FGameplayAbilitySpec* Spec = FindSpecForAbilityId(AethelnGameplayTags::Ability_Oathscar_Parry);
+	if (Spec != nullptr && Spec->IsActive()) { CancelAbilityHandle(Spec->Handle); }
+}

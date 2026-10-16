@@ -21,6 +21,7 @@ $script:PublisherUtf8NoBom = New-Object Text.UTF8Encoding($false)
 $script:PublisherCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','native-client-server-compile','portable','unreal-editor-automation','visual-package')
 # Each producer key publishes one typed report; Checks are the ordinal-sorted obligations that report can prove.
 $script:PublisherContracts = @{
+	'content' = [pscustomobject]@{ EvidenceName='content-validation-report.json'; Checks=@('content-reference-validation'); NativeExitCode=0; CleanupVerified=$null }
 	'portable' = [pscustomobject]@{ EvidenceName='ci-report.json'; Checks=@('controller-contract','portable'); NativeExitCode=$null; CleanupVerified=$null }
 	'native' = [pscustomobject]@{ EvidenceName='engine-runner-report.json'; Checks=@('controller-operational-proof','native-client-server-compile'); NativeExitCode=0; CleanupVerified=$true }
 	'unreal' = [pscustomobject]@{ EvidenceName='unreal-automation-report.json'; Checks=@('unreal-editor-automation'); NativeExitCode=0; CleanupVerified=$null }

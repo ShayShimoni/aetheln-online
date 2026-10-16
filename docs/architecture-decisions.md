@@ -1086,6 +1086,19 @@ Every accepted decision records:
   new policy identity and grants no activation authority; the earlier
   digests above stay as recorded, and `docs/continuous-integration.md` holds
   the detail.
+- **Amendment (2026-10-13, selector design paths, issue #231):** pull request
+  #347 changed only `design/`, `scripts/design/`, `tests/design/`, and
+  documents, and failed `ci-acceptance-shadow` with
+  `producer_direct_binding_invalid:content` because the selector did not
+  classify `design/**` or `scripts/design/**` and selected all eight checks.
+  Both paths are now portable-only; their sole consumer is the portable suite
+  in `scripts/ci/Invoke-CiSuite.ps1`. Case variants and lookalikes stay
+  `path_unclassified`. The reconcile step, the `change-impact` block, and the
+  authority predicate are unchanged, and `change-impact` still compiles for
+  these paths. The selector candidate is 41,534 LF-normalized bytes with digest
+  `ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`, a new
+  policy identity with no activation authority; `docs/continuous-integration.md`
+  holds the detail.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
   all eight exact obligation decisions, and its artifact ID/name/API digest as
@@ -1115,9 +1128,13 @@ Every accepted decision records:
   TA-020), so an automation failure leaves the compile job and native receipt
   intact while the unreal receipt reports the fixed `automation_reason` and
   fails red at its raw binding check. Host-lease wrapping remains a follow-up.
+  TA-025 adds a fifth publisher, `content-receipt-shadow`, which proves
+  `content-reference-validation` from the exact
+  `content-validation-report.json` of the separate `trusted-content-validation`
+  job with zero native exit and no cleanup claim.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
-  when the selector's chosen checks are a subset of those six live
-  obligations, nonce-specific requirements with an exact selector binding and
+  when the selector's chosen checks are a subset of the live obligations,
+  nonce-specific requirements with an exact selector binding and
   sorted producer bindings. Each binding carries the job name and exact
   artifact ID/name/digest from the named direct dependency. The aggregate
   independently reconciles those bindings with the current attempt's GitHub
@@ -1126,7 +1143,7 @@ Every accepted decision records:
   closed. This direct producer binding resolves the earlier shared-nonce
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
-  live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
+  live portable/controller-contract/controller-operational-proof/native/unreal/visual/content subset, the aggregate is not called. The workflow
   still validates the selector identity and the direct bindings of every
   selected live producer, so a failed or skipped required receipt remains red
   rather than hiding behind the gap, and emits the exact selected
@@ -1137,8 +1154,9 @@ Every accepted decision records:
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
-  publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations. The gap
+  publication error remains red. `clean-package-provenance-smoke` remains the
+  only unsupported obligation; TA-025 made `content-reference-validation`
+  live. The gap
   path checks only job success, the exact artifact name, and the artifact ID and
   digest format; it does not do the aggregate's artifact-API and byte
   reconciliation, and `liveBindings` is informational. A
@@ -1475,7 +1493,8 @@ Every accepted decision records:
   amendment below replaces that check with a leased re-sync.
   `trusted-candidate-compile` returns to its
   pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
-  The engine runner now has six jobs.
+  The engine runner then had six jobs; TA-025 adds `trusted-content-validation`,
+  so it now has seven jobs.
 - **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
   step "Compile supported client and server targets" took 102 s on PR #204 (a
   CI-script change) and 503 s on PR #205 (a Source change). Inside the compile
@@ -1941,7 +1960,8 @@ Every accepted decision records:
     harness as exact paths (`Invoke-UnrealAutomationTests.ps1`,
     `Sync-EditorAutomationWorkspace.ps1`, `EngineRunnerHostLease.ps1`, every
     `InitialPreparation.*`, and the three scripts those load, `LeaseJournal.ps1`,
-    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`). Every
+    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`; TA-025
+    later added `scripts/content/Invoke-ContentValidation.ps1`). Every
     classifier uncertainty publishes `editor_required=true`, and it implies
     `engine_required=true`. A controller-only pull request still compiles
     (TA-018) but skips the editor job, about two minutes of runner time. The
@@ -1964,6 +1984,192 @@ Every accepted decision records:
     output, the job gate, the head check step in both jobs, and runs the
     classifier matrix and the head check against fixtures (current, superseded,
     and every fail-open case).
+- **Amendment (2026-10-11, UHT input cache needs a new makefile, issue #167):**
+  the 2026-10-05 fix holds only for builds that create their target makefile.
+  This amendment corrects that amendment's statement that the cache gives
+  `0xF26BCE42` "on every run", supersedes its *Provisioning requirement*
+  remark that an `-EnableUHTInputCache` argument in the wrapper is a possible
+  follow-up, and completes the 2026-10-06 *Consequence* remark that the
+  editor flag depends on the input-cache file: the file must be present and
+  the build must create its makefile. The rest of both amendments stands,
+  including the `BuildConfiguration.xml` setting.
+  - *Mechanism:* a read-only investigation of the pinned engine source
+    (2026-10-11, `issue-167-uht-cache-investigation-2026-10-11.md` in the lead's
+    delivery evidence, outside the repository) found that UBT copies
+    `bEnableUHTInputCache` into the makefile's UHT target settings only while
+    it creates a makefile
+    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:2866-2868`, in
+    `BuildMakefile1`). The makefile saves and loads only three of those
+    settings (`Shared/EpicGames.Core/UHTTypes.cs:147-159`, called from
+    `UnrealBuildTool/System/TargetMakefile.cs:554` and `:650`), so
+    `EnableInputCacheRead` and `EnableInputCacheWrite` come back `false` when
+    UBT reuses a saved `Makefile.bin`. UHT then re-parses every header with
+    the cache off and skips the cache-only pass that re-applies `Referenced`
+    after parsing (`Shared/EpicGames.UHT/Types/UhtHeaderFile.cs:461`), so the
+    race between `Reset` and `AddReferencedHeader` decides the NetCore output
+    again. The short UHT summary line "(N generated files written)" marks a
+    cache-off run (`UnrealBuildTool/Modes/UnrealHeaderToolMode.cs:869-881`).
+    Paths are relative to `Engine/Source/Programs/`.
+  - *Evidence:* on 2026-10-11 a local build that reused its makefile ran UHT
+    with the cache off for 20.8 s, rewrote the engine's
+    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`,
+    and UBT then refused the NetCore relink and exited 5
+    (`FailedDueToEngineChange`). Every other build log available that day that
+    created its makefile used the cache and left NetCore unchanged. How often
+    a cache-off run flips the file is not measured.
+  - *Why `-NoEngineChanges` is not enough by itself:* UHT writes the flipped
+    file under `Engine/Intermediate` before UBT refuses the build. The tree is
+    then changed, and every later `-NoEngineChanges` build, including every CI
+    editor run, exits 5 (`editor_build_engine_changes_required`) until the file
+    is restored with its original timestamp.
+  - *CI mitigation:* `scripts/ci/InitialPreparation.BuildInvocation.ps1`
+    deletes the target's makefile,
+    `<target root>/Intermediate/Build/<platform>/x64/<target>/Development/Makefile.bin`,
+    before it starts `Build.bat`, so every build it runs creates its makefile
+    and runs UHT with the cache on. It deletes nothing else, refuses a
+    reparse point on that path (`build_path_invalid`), and records a failed
+    deletion as `build_capture_failed` without starting the build. The `x64`
+    folder is right for both platforms the wrapper accepts. UBT builds the
+    makefile path in `TargetMakefile.GetLocation`
+    (`UnrealBuildTool/System/TargetMakefile.cs:1229-1239`) from
+    `UEBuildTarget.GetPlatformIntermediateFolder`
+    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:1986-1995`), which asks
+    the platform's architecture config for the folder name through
+    `GetFolderNameForArchitectures` (`UEBuildPlatform.cs:149-153`). That calls
+    `UnrealArchitectures.GetFolderNameForPlatform`
+    (`UEBuildTarget.cs:1101-1104`), which joins the per-architecture names
+    with `+`. For Linux,
+    `LinuxArchitectureConfig` supports the single architecture `x64`
+    (`UnrealBuildTool/Platform/Linux/UEBuildLinux.cs:205-210`), the default
+    `ActiveArchitectures` returns it
+    (`UnrealBuildTool/Configuration/UEBuildPlatform.cs:84-92`), and nothing
+    overrides the per-architecture folder name, which defaults to the
+    architecture name (`UEBuildPlatform.cs:140-144`; the name `x64` is defined at
+    `UEBuildTarget.cs:873`). For Win64, `WindowsArchitectureConfig` returns
+    `x64` unless the command line overrides it
+    (`UnrealBuildTool/Platform/Windows/UEBuildWindows.cs:1235-1239`). This is
+    read from the pinned source only. No runner tree was inspected, and no
+    fixture can catch a wrong folder, because the fake `Build.bat` uses the
+    same `x64` template. The wrapper
+    is the only route by which CI builds a project target outside UAT: the
+    editor build, the client and server compile, packaging's host editor
+    build, initial preparation and the cold dry run all use it. Packaging's
+    client and server builds already delete the makefile: BuildCookRun
+    `-clean` and the split recipe's `Clean.bat` run UBT's clean mode, which
+    deletes `TargetMakefile.GetLocation(...)`
+    (`UnrealBuildTool/Modes/CleanMode.cs:179`). Creating the makefile costs a
+    few seconds per build, and UHT then runs on every build (about 4 to 6 s
+    with the cache on). Compile actions are not affected. The compile
+    report's pre-run presence fields still describe the state before the
+    wrapper, so a managed build now usually records
+    `makefileReason=no_existing_makefile` while `makefilePresentBeforeRun` is
+    `true`.
+  - *Local rule:* delegated agents delete their worktree's target makefile
+    before every local engine build, check NetCore with the lead's
+    `restore-netcore.ps1 -Check` tool before each build, and restore it with
+    that tool (keeping the original timestamp) after an exit 5 that names
+    NetCore. These rules live in the lead's agent rules outside the
+    repository.
+  - *Not covered:* UBT runs that the wrapper does not start still reuse their
+    makefile and run UHT with the cache off: editor-started rebuilds, Live
+    Coding, IDE builds, contributor command-line builds that skip the
+    deletion, `scripts/content/Invoke-ContentValidation.ps1`, host-tool
+    provisioning, and the engine-runner gate's unmanaged compile path, which
+    CI does not use.
+  - *Assumption:* the mitigation assumes the engine binaries were built from
+    cache-on UHT output. An owner-authorized engine or host-tool rebuild that
+    reuses a target makefile runs UHT with the cache off and can relink NetCore
+    from the flipped output. After that, every cache-on CI build rewrites the
+    file back and every `-NoEngineChanges` editor run exits 5. So the
+    authorized-rebuild procedure must delete the target `Makefile.bin` before
+    its editor build (see
+    [Developer Environment and DDC](developer-environment-and-ddc.md)).
+    *Residual limitation:*
+    `scripts/build/HostToolProvisioning.BuildInvocation.ps1` (lines 3 and 33)
+    builds the editor directly with `Build.bat` and does not delete the
+    makefile today. That step stays manual until a code change adds it.
+  - *Decision:* on 2026-10-11 the owner chose in chat (recorded on Issue #167)
+    to keep the pinned Epic engine unmodified. That rules out an engine patch.
+    The owner chose to rely on deleting the target's `Makefile.bin` before
+    every build, with the lead's NetCore check and restore tool as a backstop.
+  - *Rejected:* patching the engine source, either to save and load the two
+    cache settings in `UHTTypes.cs` and raise `TargetMakefile.CurrentVersion`,
+    or to run the `Referenced` re-apply pass at `UhtHeaderFile.cs:461`
+    whatever the cache setting. Either patch would make the pinned engine tree
+    no longer a clean checkout. Also rejected: `-EnableUHTInputCache` on the
+    UBT command line (it forces one `command_line_changed` makefile rebuild,
+    after which the setting is lost again), `-NoUBTMakefiles` (UBT still
+    loads the makefile), and `-ForceHeaderGeneration` (it turns the cache
+    read off).
+  - *Evidence of the change:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`
+    (required suite entry) and `tests/ci/InitialPreparation.Build.Tests.ps1`
+    run the wrapper against a fake `Build.bat` that reports whether the
+    target's makefile still exists when it starts; they require that it did
+    not, and that a makefile of another target or configuration remains.
+- **Amendment (2026-10-12, every declared project test, issue #237):** the
+  harness this job runs no longer runs the frozen two-test filter. It runs
+  `^Aetheln.`, every test whose full path starts with `Aetheln.`. Before
+  launch it derives the expected set by scanning `Source/` at the tested
+  revision for `IMPLEMENT_SIMPLE_AUTOMATION_TEST` declarations, and it still
+  requires exact discovery against that set. A scan with no tests, a
+  duplicate, an unprefixed name, or a declaration form it cannot read fails
+  `preflight` before the editor starts. The receipt producer and the
+  aggregate check every record against the same selection: the filter, 1 to
+  1024 tests, each `Aetheln.`-prefixed, unique, and passed without warnings or
+  errors. The aggregate's parse bounds for this report rise to 8192
+  properties and 1024 array items. The report schema (version 1), the
+  failure-reason set, the workflow, the step bounds, and the CI authority
+  predicate are unchanged.
+  - *Measured:* on 2026-10-12 the full harness ran 142 tests in 36 s on the
+    pinned engine at PR #333's head, against its 600-second timeout and
+    12-minute step, so no bound changes.
+  - *Rejected for now:* the receipt and aggregate re-scanning `Source/`
+    themselves. Both hosted jobs check out the tested revision, so this
+    remains possible, but it needs a source-root input and fixture source
+    trees in three test files.
+- **Amendment (2026-10-11, issue #299 follow-up):** a test now walks the
+  dot-sourcing chain from the editor job's scripts and fails if any script it
+  loads does not make `editor_required` true. A superseded job writes a step
+  summary line, since it ends green with every later step skipped. The
+  `change-impact` portable-only set gains `.agents/**` and `tests/build/**`,
+  matching the selector, so such a pull request starts no engine job. The
+  `.agents/**` exemption supersedes TA-016's rejected exemption of the whole
+  `.agents/` directory: the issue #151 delivery harness that TA-016 protected
+  is retired, only skill text remains there, and the selector has treated the
+  directory as portable-only since issue #70 retired the delivery-harness
+  obligation (commit af5cb46e). TA-012's closed-set list above is historical
+  and is superseded by this amendment for those two paths. The hosted
+  `powershell-yaml` test download makes up to five attempts with a doubling
+  delay between them and never retries wrong bytes. In the initial-preparation
+  lease, a real sharing violation still reaches the caller unmapped, as before;
+  the only change is that a bare non-sharing `IOException` from a cmdlet is no
+  longer reported as `lease_held`. No ceiling, trust predicate, or lease rule
+  changes.
+- **Amendment (2026-10-13, issue #299 PR 4):** `change-impact` now diffs
+  `<merge-base>...<head>` (`git diff --name-status --no-renames
+  <base>...<head>`) instead of the base SHA against the head, so code merged to
+  `develop` after a branch point no longer makes a docs-only pull request
+  compile. A missing base or head commit is fetched by SHA with full ancestry
+  (no `--depth=1`) so the merge base can be computed, and "no merge base" fails
+  closed as `diff_failed`. TA-012's wording that the classifier compares the
+  "exact pull-request base SHA and head SHA" is superseded for the diff range;
+  the SHA validation, closed portable-only set, and every other fail-closed
+  reason are unchanged. The `change-impact` block pin is now 7,611 bytes,
+  SHA-256 `3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`.
+- **Amendment (2026-10-13, issue #231):** `change-impact`'s portable-only set
+  gains `design/**` and `scripts/design/**` (one case-sensitive regex line in
+  `Test-PortablePath`), matching the selector since pull request #351. The
+  only reader of those paths is `scripts/ci/Invoke-CiSuite.ps1`, which runs the
+  four combat-registry checks as required portable suites; nothing under
+  `Source/`, `Config/`, `Content/`, `Plugins/`, or `.github/`, and no other
+  script, reads them, so a compile or Editor run cannot prove them (the same
+  reasoning as the issue #299 `.agents/**` and `tests/build/**` amendment). Case
+  variants and lookalike directories still compile. The `editor_required` set,
+  the trust predicates, the superseded-head check, and every fail-closed reason
+  are unchanged, and the selector source and its policy digest are unchanged.
+  The `change-impact` block pin is now 7,683 bytes, SHA-256
+  `d8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7`. Revisit
+  when any engine input reads `design/**`.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2114,14 +2320,14 @@ Every accepted decision records:
   commit after release QA); publishing packages as a GitHub pre-release
   (rejected: world-downloadable on a public repository).
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
-  same bounds. Each run reserves 64 GiB of the shared handoff cap until its
-  cleanup request is acted on. The immediate kill switch is disabling the
-  workflow; the permanent rollback is reverting it. The issue #267 TA-014
-  amendment (2026-10-06) changes the controller and gate this workflow calls,
-  with no workflow change: each release package phase builds the project
-  editor modules first, leaves `UnrealPak` outside the attestation, runs the
-  manifest-set check, refuses a set `UE_ADDITIONAL_PLUGIN_PATHS`, and reports
-  the attestation record hash.
+  same bounds. Admission counts only the bytes already committed under the
+  shared handoff root (see TA-024 for the limit this leaves). The immediate
+  kill switch is disabling the workflow; the permanent rollback is reverting
+  it. The issue #267 TA-014 amendment (2026-10-06) changes the controller and
+  gate this workflow calls, with no workflow change: each release package
+  phase builds the project editor modules first, leaves `UnrealPak` outside
+  the attestation, runs the manifest-set check, refuses a set
+  `UE_ADDITIONAL_PLUGIN_PATHS`, and reports the attestation record hash.
 - **Owner:** Issue #226.
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
@@ -2130,12 +2336,15 @@ Every accepted decision records:
   owner accepted the same runner-trust risk for a manual packaging dispatch of
   `develop` (OD-7 on issue #267), extending the 2026-10-03 acceptance above,
   which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
-  presses it, or the lead presses it only with the owner's explicit OK for
-  that run; agents never dispatch it. TA-024 records the separate
-  `.github/workflows/develop-packaging.yml` identity that carries it. The
-  runner-trust analysis, the fork-run rule, the operator rule, and the
-  revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
-  still keeps no manual trigger.
+  presses it. No agent other than the lead dispatches it, and the lead only
+  with the owner's explicit OK for that run. The workflow cannot tell a lead
+  dispatch from an owner dispatch, because both run as `ShayShimoni`, and so
+  does every agent that uses the owner's `gh` credentials. Who may dispatch,
+  and the per-run OK, are therefore enforced by process, not by the workflow.
+  TA-024 records the separate `.github/workflows/develop-packaging.yml`
+  identity that carries it. The runner-trust analysis, the fork-run rule, the
+  operator rule, and the revisit triggers above apply to it unchanged.
+  `prototype-quality-gates.yml` still keeps no manual trigger.
 
 ### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
 
@@ -2252,8 +2461,11 @@ Every accepted decision records:
   `contents: read`, checkouts pin the dispatched SHA without persisted
   credentials, and only five redacted reports are uploaded with the default
   retention. There is no build number and no release evidence. Who may
-  dispatch: the owner, or the lead only with the owner's explicit OK for that
-  run (OD-8).
+  dispatch: the owner; no agent other than the lead, and the lead only with
+  the owner's explicit OK for that run (OD-8). The workflow cannot tell a lead
+  dispatch from an owner dispatch (both run as `ShayShimoni`, as does every
+  agent that uses the owner's `gh` credentials), so who may dispatch, and the
+  per-run OK, are enforced by process, not by the workflow.
 - **Context:** The weekly schedule is the only other path that packages
   `develop`, so proving a packaging fix (PR #301 on issue #267) waits
   up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
@@ -2272,11 +2484,18 @@ Every accepted decision records:
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner` with the
   same bounds; a dispatch that overlaps the schedule or a release run
   interleaves phase by phase in separate run-scoped handoff directories.
-  Residual risk: every packaging run reserves 64 GiB of the shared 256 GiB
-  handoff cap until its cleanup request is acted on, so dispatches between
-  cleanups can make a later scheduled, release, or dispatched run fail closed
-  with `handoff_storage_exhausted`. The owner checks the cleanup requests
-  before dispatching. This decision adds no workflow-level dispatch cap; that
+  Residual risk: nothing is reserved for a run in progress. Admission happens
+  once, in the PackageClient phase of `scripts/ci/Invoke-EngineRunnerGate.ps1`:
+  it counts only the bytes already committed under the shared handoff root and
+  refuses with `handoff_storage_exhausted` when they exceed 256 GiB minus
+  64 GiB (192 GiB). A run that does not overlap another therefore either
+  stays within 256 GiB or is refused with `handoff_storage_exhausted` before
+  packaging. Runs whose phases interleave on the shared engine queue
+  (scheduled, release, develop dispatch) can together exceed the 256 GiB cap.
+  The protection is that the dispatcher checks the cleanup requests and the
+  free disk space before a dispatch: the owner, or the lead when the owner OKs
+  the run.
+  This decision adds no workflow-level dispatch cap; that
   cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
   switch is disabling the workflow; the permanent rollback is reverting it.
 - **Evidence:** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact
@@ -2289,6 +2508,280 @@ Every accepted decision records:
 - **Owner:** Issue #267.
 - **Revisit trigger:** The TA-022 revisit triggers, a dispatch needs inputs or
   another branch, or the handoff budget blocks a scheduled or release run.
+- **Amendment (2026-10-11, PR #315 and #316 reviews, issue #267):** Corrected
+  the handoff admission wording (committed bytes only, no reservation; a run
+  that does not overlap another either stays within 256 GiB or is refused with
+  `handoff_storage_exhausted`) and the dispatch authority wording (who may
+  dispatch is enforced by process, not only the per-run OK).
+
+### TA-025 - Separate Engine-Runner Job for Content Reference Validation
+
+- **Status:** Accepted
+- **Acceptance:** Lead decisions D1-D10 on issue #120 (2026-10-03), recorded
+  from the producer-4 design.
+- **Scope:** Issue #167 Package 3C `content-reference-validation` producer
+  (producer 4), the content-validation launcher and scanner from issue #120,
+  and the engine-runner ceilings in TA-012, TA-015, and TA-020.
+- **Decision (2026-10-05):** A new self-hosted job,
+  `trusted-content-validation`, runs the content-validation launcher
+  (`scripts/content/Invoke-ContentValidation.ps1`) against the live Asset
+  Registry, and a hosted publisher, `content-receipt-shadow`, turns its report
+  into a shadow receipt under producer key `content`.
+  - *Placement (D2):* the job needs `ci-selection-shadow` and
+    `trusted-editor-automation`, runs only when the selector selects
+    `content-reference-validation`, keeps the pull-request, same-repository,
+    owner, and triggering-actor predicates, and joins the
+    `aetheln-engine-runner` group with `queue: max` and
+    `cancel-in-progress: false`. It leaves producer 3's job unchanged.
+    Because the content job needs the editor job, and only the editor job's
+    leased re-sync puts the managed workspace at the tested revision, the
+    issue #299 editor gate (TA-020 amendment) also runs the editor job when
+    `scripts/content/Invoke-ContentValidation.ps1` changes (2026-10-12).
+    The job also reads the editor job's `automation_reason` and starts only
+    when it is `none`: the lease was taken and released, the workspace was
+    re-synced to the tested revision, and no step failed or was superseded.
+    Any other reason, an empty one included, skips it. After
+    `editor_host_lease_failed`, `editor_host_lease_release_failed`, or
+    `editor_build_interrupted` the host lease state is unknown and the editor
+    job keeps the workspace and the held journal as recovery evidence (#243);
+    after `editor_control_checkout_failed` the editor job never took the lease
+    or re-synced; after `superseded_head` the workspace may still hold this
+    stale head. An editor build or automation failure also skips the content
+    job; the aggregate is already red then (2026-10-12, PR #326 reviews).
+  - *Bounds (D9):* the launch step passes `-BuildTimeoutSeconds 900` and
+    `-TimeoutSeconds 600` and is bounded at 27 minutes: the two launcher
+    bounds plus 2 minutes for the launcher's own checks outside them;
+    residue cleanup, bind, upload, and outcome take 1 minute each, plus a
+    3-minute margin, for a 34-minute job ceiling. D9 started at 25 and 32
+    minutes (31 recorded, plus the outcome step that producer 3 also has).
+    The live launcher run (L1, 2026-10-05) resized them: on the CI path, after
+    a CI-style editor build, the launcher's build phase took about 30 seconds,
+    the 51-asset commandlet about 22 to 25 seconds, and the launcher's checks
+    outside both bounds about 25 seconds (engine-tree `git status` takes
+    3.5 seconds per call); a cold build phase took about 110 seconds. The
+    build and commandlet bounds stay at 900 and 600 seconds.
+  - *Build alignment (D3):* the launcher's editor build passes the CI editor
+    build's `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0` and,
+    like it, no `-Compiler`, so after the editor job the launcher's build is
+    expected to be a no-op rather than a toolchain switch. Like it, the
+    launcher also passes `-NoEngineChanges` (TA-020 2026-10-06 amendment,
+    issue #267): its build holds no engine host lease, so UBT exits 5
+    instead of rewriting an existing engine file. In CI the content job starts
+    only after a clean editor outcome (`automation_reason` `none`), so the flag
+    there guards against an engine tree that changed between the two jobs; it
+    also guards every local launcher run.
+    A launcher test pins the flag and the two values to
+    `InitialPreparation.BuildInvocation.ps1`. Because UBT
+    logs its toolchain line only when it executes actions, the launcher reads
+    the compiler and SDK identity from the toolchain line that UBT records in
+    the target makefile (`docs/asset-intake-and-content-validation.md`). As
+    the CI editor build does since the TA-020 2026-10-11 amendment, the
+    launcher deletes that `Makefile.bin` before its build, so UBT always
+    creates it and UHT keeps its input cache on; a reparse point on the path is
+    refused before any build starts.
+  - *Workspace:* the job runs the launcher from the registered managed compile
+    workspace without a control checkout, a re-sync, or the engine host lease.
+    It first requires the exact tested revision and a clean workspace
+    (`content_workspace_revision_changed`, `content_workspace_dirty`, or
+    `content_workspace_query_failed` otherwise). The launcher writes into a
+    fresh `TestResults/content-validation-<run>-<attempt>` directory because it
+    never prunes its retained pending and backup files; the step copies the
+    report to the runner temp directory and removes that directory. Launcher
+    output carries absolute paths, so it goes to runner-local files and only
+    fixed codes reach the public log. Residue cleanup removes the untracked
+    compile inputs the next managed sync would reject, after every launch.
+  - *Claim boundary (D1):* the receipt and the aggregate both parse the exact
+    `aetheln.content-validation-report` version-2 report (closed top-level,
+    `execution_provenance`, and `counts` field sets) and require the tested
+    revision, the pinned engine identity, target `AethelnOnlineEditor` Win64
+    Development, a clean repository, `registry_source=live_asset_registry`,
+    `counts.errors=0`, a `passed` or `non_promotion` result, at least one
+    asset, and, for every asset, one `reference_boundary` family whose six
+    checks are exactly `audience_reachability`, `broken_references`,
+    `compatible_content_version`, `hard_reference_exceptions`, `redirectors`,
+    and `stable_id_unique`, each applicable and `passed`. The only
+    `reference_boundary` finding allowed is the lifecycle finding that
+    accepted `non_promotion` implies: code
+    `content.reference_boundary.non_promotion`, severity `non_promotion`, and
+    evidence field `thresholds.unresolved_budgets`, on a `temporary_prototype`
+    asset, at most one per asset. Any other `reference_boundary` finding fails
+    both parsers.
+    `evidence_unavailable` never passes. The other seven families still run
+    and any deterministic error fails the report, but they are not claimed,
+    and a green content receipt is never content approval. Binding
+    `policy_sha256` and `intake_sha256` to the tested revision was left out.
+    The aggregate parses this report with larger property and array bounds
+    than the other reports (about 230 properties and 40 array items per
+    asset); the 4 MiB evidence limit stays binding.
+  - *Identity (D8):* as for producer 3, the aggregate does not bind the engine
+    job's runner name or labels.
+  - `content-reference-validation` leaves every unsupported or pending list
+    and gets the `content` requirements-template job, sorted before `native`,
+    instead of being parked under `portable`.
+    `clean-package-provenance-smoke` (producer 5) stays unsupported.
+- **Evidence:** the producer-4 design and lead decisions D1-D10 on issue
+  #120. Portable fixtures pin the publisher contract
+  (`Publish-CiAcceptanceReceipt.Tests.ps1`), the receipt and aggregate parsers
+  with negative cases and a 51-asset report (`New-CiAcceptanceReceipt.Tests.ps1`,
+  `Invoke-CiAcceptanceAggregate.Tests.ps1`), the gap and template changes
+  (`New-CiAcceptanceAggregateContext.Tests.ps1`, `Get-CiSelection.Tests.ps1`),
+  the job, its executed steps, and the publisher
+  (`Test-PrototypeQualityWorkflow.Tests.ps1`), and its bounds
+  (`Test-RunnerSchedulingPolicy.Tests.ps1`). The parser fixtures stay
+  synthetic. The live launcher runs (L1, decision D6) supplied the real
+  51-asset report that both parsers, the allowlist, and the parse bounds were
+  checked against.
+- **Cost:** an owner engine pull request that selects content can hold the
+  runner for up to 120 minutes (40-minute compile, 46-minute editor
+  automation, and 34-minute content validation) when no older waiter queued
+  between the jobs. A scheduled phase that queues while the content job runs
+  waits at most 34 minutes for it.
+- **Consequences:** a content or configuration owner pull request can now
+  reach a complete shadow aggregate with four receipts instead of the green
+  producer gap; any selection that includes `clean-package-provenance-smoke`
+  still ends on the gap. Workspace race: when another owner pull request's
+  compile, or a newer push to the same pull request, enters the engine queue
+  between this run's editor job and content job, it can re-sync the managed
+  workspace first. The launch step then stops with
+  `content_workspace_revision_changed`, and recovery takes "Re-run all jobs",
+  as it did for the editor job before its re-sync amendment. Authority stays
+  off.
+- **Alternatives:** steps inside `trusted-editor-automation` (changes that
+  job's ceiling and pins); a separate job after the compile with its own full
+  editor build; a portable parser of package headers (a weaker claim under the
+  same name); a leased re-sync as the editor job does (more steps and a larger
+  ceiling; deferred until the race is observed).
+- **Owner:** Issue #167, with issue #120 for the launcher and scanner.
+- **Revisit trigger:** the first live launcher run, a recorded
+  `content_workspace_revision_changed` race, a report that approaches the 4 MiB
+  limit, or the producer-5 change.
+
+### TA-026 - Server-Only C++ State Machine for the Prototype Enemy
+
+- **Status:** Accepted
+- **Acceptance:** Accepted when the delivery lead merges the reviewed issue #83
+  P1 pull request, under the owner's delegated authority.
+- **Scope:** The prototype's one enemy (issues #83 and #20): its decision
+  logic, perception, and navigation control. Not later enemy archetypes,
+  elites, or bosses.
+- **Decision:** The enemy's decisions run in a server-only C++ state machine
+  inside a project `AAIController` subclass, driven by the #60 timeline pass,
+  as specified in [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md).
+  Perception is a server-side eligibility query, not AI Perception. Movement
+  uses the engine's path following on a static navmesh. `GameCombat` adds the
+  engine runtime module `AIModule`, which brings `NavigationSystem` as its own
+  public dependency. The prototype adds no Behavior Tree, Blackboard,
+  StateTree, or AI Perception asset, and enables no plugin.
+- **Context:** #83 requires the AI approach to come from measured prototype
+  needs, not from habit. No enemy code existed when this was decided, so the
+  needs below come from the canonical documents and the existing combat code,
+  not from running candidates side by side. The #83 criterion therefore stays
+  partly met: P3 measured the state machine, not a rival framework.
+- **Evidence (needs derived from the documents and code):**
+  - One enemy type with one attack in one controlled space
+    (`docs/game-design-bible.md`, ledger row P10-014). The specification has
+    seven flat states and no nesting, parallel branches, or shared
+    sub-behaviors.
+  - Server-only decisions (TA-002, TA-003). An `AAIController` exists only on
+    the server, so a controller-owned state machine gives clients nothing to
+    run or drive.
+  - Deterministic headless tests. The repository's combat tests run in a
+    headless automation world with no editor-authored assets
+    (`Source/GameTests/Private/AethelnCombatTestWorld.h`). A C++ state machine
+    runs there directly and is reviewed as text. Behavior Tree and StateTree
+    both need an editor-authored binary asset, which a reviewer cannot read as
+    text and which the content validation of #120 would then govern.
+  - No plugin change. StateTree is a plugin that is off by default, so using it
+    means enabling it in the `.uproject`, a project-wide change to every
+    target. `AIModule` and `NavigationSystem` are engine runtime modules and
+    need no plugin.
+  - Exact authored times. The enemy's transitions must use the timeline's
+    authored times and run inside its pass. This is not a differentiator: a
+    Behavior Tree task or a StateTree state could keep the same time
+    bookkeeping. It only means a framework would not remove that code.
+- **Measured since:** #83 P3 recorded the navmesh build time and size and the
+  server tick cost with one enemy engaging one player
+  ([Measurements](enemy-ai-and-navigation.md#measurements); measurements only,
+  no thresholds), and tested one enemy against two PIE clients on a clean and
+  an impaired link. **Not yet measured:** behavior under the #45 network
+  profiles. No candidate was prototyped and timed against another.
+- **Alternatives:** Behavior Tree with Blackboard (rejected for the prototype:
+  an editor asset and a brain component for seven flat states, outside the
+  headless tests); StateTree (rejected for the prototype: a plugin enable and
+  an editor asset, outside the headless tests); AI Perception (rejected for the
+  prototype: the arena has no line-of-sight rule, and eligibility is a
+  combat-policy query the timeline already defines).
+- **Consequences:** New enemy behavior needs a programmer and a code review.
+  The state machine must keep each transition at its authored time, run inside
+  the timeline pass, and stay covered by headless tests. A later change to
+  Behavior Tree or StateTree must keep the server-only rule and the timeline's
+  ordering.
+- **Owner:** Issue #83, with issue #20 for the enemy's behavior.
+- **Revisit trigger:** a second enemy archetype, an elite or boss with layered
+  behavior, a designer who must author behavior without code, an arena with
+  cover that needs line of sight, or a P3 measurement that shows the state
+  machine as a material server cost.
+
+### TA-027 - One Shared Primary Data Asset per Authored Attack Definition
+
+- **Status:** Accepted
+- **Acceptance:** Lead decision D1 on issue #84 (2026-10-12), recorded from
+  the [Animation and Combat-Content Authoring Pipeline](animation-and-combat-content-pipeline.md#storage-form).
+- **Scope:** Issue #84 authoring pipeline; the authored form of attack
+  definitions that #60 (basic chain), #20 (enemy steps), and #260 (Oathscar
+  actives) read. It does not change the timeline, contacts, the request, or
+  the `CombatActivation` record.
+- **Decision:** Each authored attack is one `UAethelnAttackDefinition`, a
+  primary data asset derived from `UAethelnPrimaryAssetDefinition` with
+  audience `Shared`, governed by #120 intake and content validation. It holds
+  the ability ID, the step definitions (windows, shapes, paths, damage, Guard
+  pressure, target bound, interruption), the sampling bounds, and the
+  Endurance cost. Its `StableContentId` is the registry semantic ID and its
+  `ContentVersion` is the version the request and the record carry. The
+  server reads it as the authority. A client may read its windows for
+  presentation only. It never references presentation; a client-only
+  presentation binding references it. For a migrated attack it replaces the
+  ini `ContentVersion` and step path; attacks not yet migrated keep the ini
+  path, which fails closed while unset.
+- **Context:** #60 left definitions in ini "until #84 and #106 supply the
+  asset and registry pipeline"; #106 shipped Markdown generators only. Ini
+  gives designers no editor validation, no stable-ID binding to intake, and no
+  asset for a presentation binding to reference. Observers derive phases from
+  the authored windows (#60 Observers), so the windows must reach clients.
+- **Evidence:** #84 P2 adds the class, its fail-closed validator (the same
+  step rules the chain's grant validation uses, through
+  `AethelnAttackTimeline::FindStepListProblem`), editor `IsDataValid`, and the
+  tests `Aetheln.GameCombat.AttackContent.DefinitionValidation` and
+  `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing`. No
+  definition asset exists yet. The owner decided the values (#84 D3, 2026-10-12): the
+  existing GameTests fixture values are promoted as provisional, with no new
+  numbers, and re-tuned at the P5 feel test. P3 promotes them into the ini
+  section of the unmigrated basic chain (`Config/DefaultGame.ini`, marked
+  provisional), and adds the client-only presentation binding class and its
+  validator (`Aetheln.GameCombat.AttackContent.PresentationBindingValidation`).
+- **Alternatives:** keep ini (no editor validation or intake binding); a
+  ServerOnly definition plus a Shared mirror of the windows (two sources of one
+  truth that can drift); generating ini from the design registry (the registry
+  carries no tuning and is not runtime data).
+- **Consequences:** shapes, damage, and cost values are in the client cook;
+  canon does not treat them as hidden information. A definition that fails its
+  validator is refused, never replaced by a default or an older version. Any
+  authoritative change bumps `ContentVersion` in the same change.
+- **Follow-up (not implemented):** migrating an attack. The ability resolves
+  its definition on the server at grant and takes the content version, steps,
+  sampling bounds, and cost from it; the reads of the ability's
+  `ContentVersion` in the ASC and the timeline then come from the definition.
+  P3 recorded that the provisional values stay in the ini of the unmigrated
+  chain: a migrated chain needs a `DA_` package under `Content/`, which needs
+  an editor session, an LFS lock, and a `runtime-asset-intake.json` record, and
+  keeping the same values in both the ini and the asset would be two sources of
+  one truth. When the first definition asset lands, its values replace the ini
+  section in the same change.
+- **Owner:** Issue #84, with #60, #20, and #260 as consumers and #120 for
+  intake.
+- **Revisit trigger:** a definition value that must stay hidden from clients,
+  a second runtime consumer that needs a different form, or #106 producing
+  runtime definitions.
 
 ## Candidate Decisions
 
@@ -2301,7 +2794,7 @@ Every accepted decision records:
 | TC-005 | Server tick, capacity, layers, and bandwidth | Representative combat and stress captures with explicit failure shape | #45 | Canonizing 32/64 players, a tick value, or bandwidth estimate | Approved performance baseline |
 | TC-006 | Production backup, retention, RPO, and RTO | Data criticality, provider capability, restore drills, operating cost | #36, #40, #48 | Vendor-default recovery promises | Before public production |
 | TC-007 | Anti-cheat and platform services | Threat coverage, platform support, privacy, cost, operations, false-positive handling, exit strategy | #40 | Treating client integrity as gameplay authority | Before external risk justifies integration |
-| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
+| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6; Hold the Line was dropped by the owner on 2026-10-13, #260, so the candidate is open: gas-foundation.md Open Decisions 7): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
 
 ## Rejected Architecture Alternatives
 

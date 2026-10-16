@@ -607,6 +607,50 @@ bool FAethelnActivationStockRoutesRefusedTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnActivationDebugRequestsRefusedTest,
+	"Aetheln.GameCombat.ActivationSeam.DebugRequestsRefused",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnActivationDebugRequestsRefusedTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnActivationSeamTests;
+
+	FScopedCombatTestWorld TestWorld;
+	FSeamFixture Fixture;
+	if (!Fixture.Init(*this, TestWorld))
+	{
+		return false;
+	}
+	UAethelnAbilitySystemComponent& AbilitySystem = *Fixture.Player.AbilitySystem;
+
+	// Test-set bucket, not tuning: two tokens and no refill, so only a call that draws a token can drain it.
+	AbilitySystem.ProvisionalActivationBucketCapacity = 2.0f;
+	AbilitySystem.ProvisionalActivationBucketRefillPerSecond = 0.0f;
+	TestWorld.World->RealTimeSeconds = 100.0;
+
+	AbilitySystem.ServerPrintDebug_Request();
+	AbilitySystem.ServerPrintDebug_RequestWithStrings({ TEXT("client-supplied") });
+	TestEqual(TEXT("The refused dump wrote no server debug strings"), AbilitySystem.GetServerDebugStrings().Num(), 0);
+	TestEqual(TEXT("The refused request stored no client debug strings"), AbilitySystem.GetClientDebugStrings().Num(), 0);
+	TestEqual(TEXT("Refused debug requests send no outcome"), Fixture.Outcomes.Num(), 0);
+	ExpectResult(*this, TEXT("Each refused debug request drew one bucket token"), Fixture.Submit(1, ProbeId()), EResult::RateLimited);
+	TestFalse(TEXT("Nothing activated"), Fixture.IsActive(Fixture.ProbeHandle));
+
+	// Control: the engine implementations, called directly past the override, do write both.
+	// The engine logs its dump at Warning: one header line and eleven indented lines for this fixture.
+	AddExpectedMessage(
+		TEXT("LogAbilitySystem: (ABILITIES ATTRIBUTES GAMEPLAYEFFECTS for avatar|\\s+\\S)"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		12);
+	AbilitySystem.UAbilitySystemComponent::ServerPrintDebug_Request_Implementation();
+	TestTrue(TEXT("Control: the engine dump writes server debug strings"), AbilitySystem.GetServerDebugStrings().Num() > 0);
+	AbilitySystem.UAbilitySystemComponent::ServerPrintDebug_RequestWithStrings_Implementation({ TEXT("client-supplied") });
+	TestEqual(TEXT("Control: the engine request stores the client debug strings"), AbilitySystem.GetClientDebugStrings().Num(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnActivationRateBoundTest,
 	"Aetheln.GameCombat.ActivationSeam.RateBound",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

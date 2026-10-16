@@ -707,21 +707,47 @@ function New-BuildArtifactEvidence {
 	}
 }
 
-function Get-EditorBuildToolchain([string] $BuildLogPath, [object] $Guard) {
-	$BuildLog = $Guard.ReadUtf8($BuildLogPath)
+function Get-EditorBuildToolchain([string] $MakefilePath, [string] $BuildLogPath, [object] $Guard) {
+	# UBT stores its toolchain line in the target makefile's diagnostics whenever it
+	# creates the makefile, but prints it only when it executes actions, so an
+	# up-to-date build logs none. UBT recreates the makefile when its arguments change
+	# or a compiler, linker, or resource-compiler file is newer than the makefile.
 	$Pattern = '^Using Visual Studio (?<CompilerVersion>[0-9]+(?:\.[0-9]+){2,3}) toolchain \((?<CompilerRoot>.+)\) and Windows (?<ResourceCompilerVersion>[0-9]+(?:\.[0-9]+){3}) SDK \((?<SdkRoot>.+)\)\.\r?$'
-	$ToolchainMatches = [regex]::Matches($BuildLog, $Pattern, [Text.RegularExpressions.RegexOptions]::Multiline)
+	$Options = [Text.RegularExpressions.RegexOptions]::Multiline
+	$Reader = [IO.BinaryReader]::new([IO.File]::Open($MakefilePath, 'Open', 'Read', 'Read'))
+	try {
+		# UE 5.8.1 makefile header: int32 version 37, VProject flag, int64 creation
+		# ticks, then the diagnostics as an int32 count of int32-length UTF-8 strings.
+		if ($Reader.ReadInt32() -ne 37 -or $Reader.ReadByte() -ne 0) { throw 'UBT target makefile has an unsupported format; expected version 37 without VProject.' }
+		[void]$Reader.ReadInt64()
+		$Count = $Reader.ReadInt32()
+		if ($Count -lt 1 -or $Count -gt 64) { throw "UBT target makefile diagnostics count $Count is out of range." }
+		$Utf8 = [Text.UTF8Encoding]::new($false, $true)
+		$Diagnostics = @(for ($Index = 0; $Index -lt $Count; $Index++) {
+			$Length = $Reader.ReadInt32()
+			if ($Length -lt 0 -or $Length -gt 4096) { throw "UBT target makefile diagnostic length $Length is out of range." }
+			$Bytes = $Reader.ReadBytes($Length)
+			if ($Bytes.Length -ne $Length) { throw 'UBT target makefile diagnostics are truncated.' }
+			$Utf8.GetString($Bytes)
+		})
+	}
+	finally { $Reader.Dispose() }
+	$ToolchainMatches = @($Diagnostics | ForEach-Object { [regex]::Match($_, $Pattern, $Options) } | Where-Object { $_.Success })
 	if ($ToolchainMatches.Count -ne 1) {
-		throw "Editor build log must contain exactly one complete Visual Studio and Windows SDK toolchain identity; found $($ToolchainMatches.Count)."
+		throw "UBT target makefile diagnostics must contain exactly one complete Visual Studio and Windows SDK toolchain identity; found $($ToolchainMatches.Count)."
 	}
 	$Match = $ToolchainMatches[0]
+	# A build that executed actions also logs the line; it must name the same toolchain.
+	foreach ($Logged in [regex]::Matches($Guard.ReadUtf8($BuildLogPath), $Pattern, $Options)) {
+		if ($Logged.Value.TrimEnd("`r") -cne $Match.Value) { throw 'The Editor build log toolchain identity differs from the UBT target makefile.' }
+	}
 	$CompilerRoot = [string]$Match.Groups['CompilerRoot'].Value
 	$SdkRoot = [string]$Match.Groups['SdkRoot'].Value
 	if (-not [IO.Path]::IsPathRooted($CompilerRoot) -or -not [IO.Path]::IsPathRooted($SdkRoot)) {
-		throw 'Editor build log toolchain roots must be absolute paths.'
+		throw 'UBT target makefile toolchain roots must be absolute paths.'
 	}
-	$CompilerPath = Resolve-RequiredPath -Name 'Compiler derived from Editor build log' -Path (Join-Path $CompilerRoot 'bin\Hostx64\x64\cl.exe') -PathType 'Leaf'
-	$ResourceCompilerPath = Resolve-RequiredPath -Name 'Resource compiler derived from Editor build log' -Path (Join-Path $SdkRoot ("bin\$($Match.Groups['ResourceCompilerVersion'].Value)\x64\rc.exe")) -PathType 'Leaf'
+	$CompilerPath = Resolve-RequiredPath -Name 'Compiler recorded by the UBT target makefile' -Path (Join-Path $CompilerRoot 'bin\Hostx64\x64\cl.exe') -PathType 'Leaf'
+	$ResourceCompilerPath = Resolve-RequiredPath -Name 'Resource compiler recorded by the UBT target makefile' -Path (Join-Path $SdkRoot ("bin\$($Match.Groups['ResourceCompilerVersion'].Value)\x64\rc.exe")) -PathType 'Leaf'
 	return [pscustomobject]@{
 		CompilerVersion = [string]$Match.Groups['CompilerVersion'].Value
 		CompilerPath = $CompilerPath
@@ -1046,11 +1072,33 @@ $ReportFileIdentity = $OutputGuard.GetIdentity($OutputPath)
 Invoke-OutputOpenTestSeam 'pre-build-open'
 
 Assert-ExecutionBoundary -Phase 'pre-build validation' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $ImmutableFileStates
-$BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE')
+# The same compiler and SDK pins as the CI editor build
+# (scripts/ci/InitialPreparation.BuildInvocation.ps1), so in CI this build
+# reuses that editor build instead of switching toolchains. -NoEngineChanges,
+# also as there (issue #267): UBT exits 5 instead of rewriting an existing
+# engine file, because this build holds no engine host lease.
+$BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE','-NoEngineChanges','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScriptPath) + $BuildArguments))
+# TA-020 2026-10-11, as in InitialPreparation.BuildInvocation.ps1: UBT enables the
+# UHT input cache only while it creates the target makefile, and a reused
+# Makefile.bin runs UHT with the cache off, which can rewrite the engine's
+# NetCore.init.gen.cpp. Delete this target's makefile so every build creates it;
+# a reparse point anywhere on its path is refused and starts no build.
+$StaleMakefilePath = Join-Path $RepositoryRoot 'Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin'
+if (Test-Path -LiteralPath $StaleMakefilePath -PathType Leaf) {
+	$Probe = $StaleMakefilePath
+	while ($Probe) {
+		if ((Get-Item -LiteralPath $Probe -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The AethelnOnlineEditor UBT target makefile path contains a reparse point.' }
+		$Probe = Split-Path -Parent $Probe
+	}
+	Remove-Item -LiteralPath $StaleMakefilePath -Force
+}
 $BuildExitCode = $null
 $BuildInvocationError = $null
 try {
+	# Build.bat runs 'dotnet msbuild -t:Scan', whose reusable worker nodes would stay in
+	# the build job until MSBuild's 15-minute idle timeout; the build inherits this.
+	$env:MSBUILDDISABLENODEREUSE = '1'
 	$BuildShell = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
 	$BuildInner = (ConvertTo-WindowsCommandLineArgument $BuildScriptPath) + ' ' + (($BuildArguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' ')
 	$BuildShellCommandLine = (ConvertTo-WindowsCommandLineArgument $BuildShell) + ' /d /s /c "' + $BuildInner + '"'
@@ -1069,10 +1117,11 @@ if ($BuildExitCode -ne 0) {
 
 $EditorBuildLogState = New-GuardedFileState -Guard $OutputGuard -Path $EditorBuildLogPath -Description 'Editor build log'
 $EditorBuildLogSha256 = $EditorBuildLogState.Sha256
-$Toolchain = Get-EditorBuildToolchain $EditorBuildLogPath $OutputGuard
+$EditorMakefilePath = Resolve-RequiredPath -Name 'AethelnOnlineEditor UBT target makefile' -Path (Join-Path $RepositoryRoot 'Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin') -PathType 'Leaf'
+$Toolchain = Get-EditorBuildToolchain -MakefilePath $EditorMakefilePath -BuildLogPath $EditorBuildLogPath -Guard $OutputGuard
 Assert-FileState $EditorBuildLogState 'toolchain identity capture'
-$CompilerState = New-FileState $Toolchain.CompilerPath 'Compiler derived from Editor build log'
-$ResourceCompilerState = New-FileState $Toolchain.ResourceCompilerPath 'Resource compiler derived from Editor build log'
+$CompilerState = New-FileState $Toolchain.CompilerPath 'Compiler recorded by the UBT target makefile'
+$ResourceCompilerState = New-FileState $Toolchain.ResourceCompilerPath 'Resource compiler recorded by the UBT target makefile'
 $CompilerSha256 = $CompilerState.Sha256
 $ResourceCompilerSha256 = $ResourceCompilerState.Sha256
 
@@ -1155,7 +1204,9 @@ $OutputGuard.SetInheritable($LogPath, $true)
 $ArgumentsToBind = @(
 	$ProjectPath,
 	'-run=GameTests.AethelnContentValidation',
-	"-Report=$OutputPath",
+	# The commandlet requires the published content-validation-report.json name and
+	# writes only through -ReportHandle (the pending file); publication renames it.
+	"-Report=$PublishedOutputPath",
 	"-ReportFileIdentity=$ReportFileIdentity",
 	"-ReportHandle=$ReportHandle",
 	"-Policy=$PolicyPath",

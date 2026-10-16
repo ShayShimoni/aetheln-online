@@ -250,9 +250,10 @@ bool FAethelnDamageAndLethalLatchTest::RunTest(const FString& Parameters)
 			else { ++OtherEffects; }
 		});
 	TArray<FGuid> Lethal;
-	const FDelegateHandle LethalHandle = F.Timeline->OnLethalResult.AddLambda([&](UAethelnAbilitySystemComponent* Victim, const FGuid& Id)
+	TArray<double> LethalTimes;
+	const FDelegateHandle LethalHandle = F.Timeline->OnLethalResult.AddLambda([&](UAethelnAbilitySystemComponent* Victim, const FGuid& Id, double ContactTime)
 		{
-			if (Victim == TargetAsc) { Lethal.Add(Id); }
+			if (Victim == TargetAsc) { Lethal.Add(Id); LethalTimes.Add(ContactTime); }
 		});
 	F.Press(); F.AdvanceTo(0.5);
 	TestEqual(TEXT("First hit lowers Health by the test magnitude"), Health(*Target), 25.0f);
@@ -269,6 +270,7 @@ bool FAethelnDamageAndLethalLatchTest::RunTest(const FString& Parameters)
 	if (TestEqual(TEXT("The lethal notification fires once"), Lethal.Num(), 1) && F.Records.Num() == 3)
 	{
 		TestEqual(TEXT("The lethal notification names the activation"), Lethal[0], F.Records[2].ActivationId);
+		if (F.Results.Num() == 3) { TestEqual(TEXT("The lethal notification carries the contact time (#83)"), LethalTimes[0], F.Results[2].ContactTime); }
 	}
 	TestEqual(TEXT("A new chain after completion starts"), F.Press(), EResult::Accepted);
 	F.AdvanceTo(2.5);
@@ -307,6 +309,18 @@ bool FAethelnDeadLifeStateRejectedTest::RunTest(const FString& Parameters)
 	F.AdvanceTo(1.5);
 	TestEqual(TEXT("An attacker that dies before its contact time resolves nothing"), F.Results.Num(), 0);
 	TestEqual(TEXT("The dead attacker's chain ended"), F.Ends.Last().Reason, EAethelnChainEndReason::IncompatibleState);
+	{
+		// The attacker alive check alone: zero Health without State.Dead leaves the chain running, so no reset time drops the contact.
+		FFixture G; if (!G.Init(*this)) { return false; }
+		AAethelnCombatAICharacter* Other = G.SpawnTarget(*this, FVector(60.0, 0.0, 0.0));
+		if (Other == nullptr) { return false; }
+		G.Press(); G.AdvanceTo(0.125);
+		G.Player.AbilitySystem->SetNumericAttributeBase(UAethelnCombatAttributeSet::GetHealthAttribute(), 0.0f);
+		G.AdvanceTo(0.375);
+		TestEqual(TEXT("The chain did not end"), G.Ends.Num(), 0);
+		TestEqual(TEXT("A zero-Health attacker resolves nothing"), G.Results.Num(), 0);
+		TestEqual(TEXT("Its target takes no damage"), Health(*Other), 40.0f);
+	}
 	return true;
 }
 

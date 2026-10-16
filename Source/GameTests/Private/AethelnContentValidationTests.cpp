@@ -2,11 +2,15 @@
 #include "AethelnContentValidationScanner.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
 #include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -162,12 +166,15 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 		TEXT("/Game/Fixtures/EUW_EditorLinked"),
 		TEXT("/Script/BlueprintGraph")
 	};
+	TArray<FString> RecordedRuntimeDependencies;
 	const TArray<FString> RuntimeBoundaryFailures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(
 		Referencing,
 		[&EditorOnlyTargets](const FString& TargetPackage)
 		{
-			return EditorOnlyTargets.Contains(TargetPackage) ? FString(TEXT("fixture editor-only target")) : FString();
-		});
+			return EditorOnlyTargets.Contains(TargetPackage) ? FAethelnEditorOnlyTarget{TEXT("fixture editor-only target")} : FAethelnEditorOnlyTarget{};
+		},
+		RecordedRuntimeDependencies);
+	TestTrue(TEXT("A package without asset classes records no runtime dependency"), RecordedRuntimeDependencies.IsEmpty());
 	const FString JoinedRuntimeBoundaryFailures = FString::Join(RuntimeBoundaryFailures, TEXT("\n"));
 	TestEqual(TEXT("Only runtime dependencies on editor-only content fail"), RuntimeBoundaryFailures.Num(), 2);
 	TestTrue(TEXT("A hard runtime dependency on editor-only content fails"), JoinedRuntimeBoundaryFailures.Contains(TEXT("'/Game/Fixtures/EUW_RuntimeLinked'")));
@@ -178,11 +185,11 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 	TestTrue(TEXT("The runtime Engine script package is runtime content"),
-		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/Engine")).IsEmpty());
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/Engine")).Reason.IsEmpty());
 	TestFalse(TEXT("The Editor-module UnrealEd script package is editor-only content"),
-		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd")).IsEmpty());
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd")).Reason.IsEmpty());
 	TestFalse(TEXT("An unloaded script package fails closed"),
-		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/AethelnMissingModule")).IsEmpty());
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/AethelnMissingModule")).Reason.IsEmpty());
 
 	const FString VerifiedSnapshot = TEXT("{\"schema_id\":\"aetheln.asset-registry-snapshot\",\"schema_version\":1,\"packages\":[{\"package_name\":\"/Game/Fixtures/SM_GovernedFixture\",\"repository_path\":\"Content/Fixtures/SM_GovernedFixture.uasset\",\"class_paths\":[\"/Script/Engine.StaticMesh\"],\"tags\":{},\"hard_dependencies\":[],\"soft_dependencies\":[],\"editor_only_dependencies\":[],\"content_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"is_redirector\":false}]}");
 	const FString VerifiedSnapshotPath = FPaths::CreateTempFilename(*FPaths::ProjectSavedDir(), TEXT("AethelnSnapshotBinding"), TEXT(".json"));
@@ -457,7 +464,7 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 	CheckFactStatus(TEXT("Default-config world without navigation data stays unavailable"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
 	Navigation.BooleanFacts[TEXT("navigation_config_present")] = false;
 	CheckFactStatus(TEXT("World without navigation config or data stays unavailable"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
-	Navigation.BooleanFacts[TEXT("navigation_audience_evidence_recorded")] = true;
+	Navigation.BooleanFacts.Add(TEXT("navigation_audience_evidence_recorded"), true);
 	Navigation.BooleanFacts[TEXT("navigation_config_present")] = true;
 	CheckFactStatus(TEXT("Audience evidence cannot promote a world without navigation data"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
 	Navigation.BooleanFacts.Remove(TEXT("navigation_audience_evidence_recorded"));
@@ -503,6 +510,168 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("TBD evidence does not hide deterministic success"), UnresolvedResult.DeterministicStatus, FString(TEXT("passed")));
 	TestEqual(TEXT("TBD evidence blocks promotion"), UnresolvedResult.PromotionStatus, FString(TEXT("non_promotion")));
 
+	return true;
+}
+
+namespace
+{
+	const FAethelnContentCheckFacts* FindCheckFacts(const TMap<FString, TArray<FAethelnContentCheckFacts>>& Facts, const TCHAR* FamilyId, const TCHAR* CheckId)
+	{
+		const TArray<FAethelnContentCheckFacts>* FamilyFacts = Facts.Find(FamilyId);
+		return FamilyFacts == nullptr ? nullptr : FamilyFacts->FindByPredicate([CheckId](const FAethelnContentCheckFacts& Fact) { return Fact.CheckId == CheckId; });
+	}
+
+	FString CheckStatus(const TMap<FString, TArray<FAethelnContentCheckFacts>>& Facts, const TCHAR* FamilyId, const TCHAR* CheckId)
+	{
+		const TArray<FAethelnContentCheckFacts>* FamilyFacts = Facts.Find(FamilyId);
+		if (FamilyFacts == nullptr)
+		{
+			return TEXT("missing_family");
+		}
+		const FAethelnContentFamilyResult Result = FAethelnContentValidationScanner::EvaluateFamilyFacts(FamilyId, *FamilyFacts, false);
+		const FAethelnContentCheckResult* Check = Result.CheckResults.FindByPredicate([CheckId](const FAethelnContentCheckResult& Candidate) { return Candidate.CheckId == CheckId; });
+		return Check == nullptr ? FString(TEXT("missing_check")) : Check->DeterministicStatus;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationTextureSourceFactsTest,
+	"Aetheln.Content.Validation.TextureSourceFacts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationTextureSourceFactsTest::RunTest(const FString& Parameters)
+{
+	// Like a texture in the -nullrhi commandlet: editor source data, but no cached platform data.
+	UTexture2D* Texture = NewObject<UTexture2D>(GetTransientPackage());
+	Texture->Source.Init(64, 32, 1, 7, TSF_BGRA8);
+	TMap<FString, TArray<FAethelnContentCheckFacts>> Facts;
+	FAethelnContentValidationScanner::CollectTextureFacts(*Texture, true, TEXT("fixture"), Facts);
+	const FAethelnContentCheckFacts* Mips = FindCheckFacts(Facts, TEXT("texture"), TEXT("mips"));
+	const FAethelnContentCheckFacts* PbrChannels = FindCheckFacts(Facts, TEXT("texture"), TEXT("pbr_channels"));
+	if (!TestNotNull(TEXT("The mips fact is recorded"), Mips) || !TestNotNull(TEXT("The pbr_channels fact is recorded"), PbrChannels))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Mips reads the source width"), Mips->IntegerFacts.FindRef(TEXT("width")), int64{64});
+	TestEqual(TEXT("Mips reads the source height"), Mips->IntegerFacts.FindRef(TEXT("height")), int64{32});
+	TestEqual(TEXT("Mips reads the source mip count"), Mips->IntegerFacts.FindRef(TEXT("mip_count")), int64{7});
+	TestEqual(TEXT("pbr_channels reads the source width"), PbrChannels->IntegerFacts.FindRef(TEXT("width")), int64{64});
+	TestEqual(TEXT("pbr_channels reads the source height"), PbrChannels->IntegerFacts.FindRef(TEXT("height")), int64{32});
+	TestEqual(TEXT("A sourced texture without declared mip intent is unavailable, not failed"), CheckStatus(Facts, TEXT("texture"), TEXT("mips")), FString(TEXT("evidence_unavailable")));
+
+	// Without source data the size is unknown: unavailable, never a failed zero.
+	UTexture2D* Unsourced = NewObject<UTexture2D>(GetTransientPackage());
+	TMap<FString, TArray<FAethelnContentCheckFacts>> UnsourcedFacts;
+	FAethelnContentValidationScanner::CollectTextureFacts(*Unsourced, true, TEXT("fixture"), UnsourcedFacts);
+	const FAethelnContentCheckFacts* UnsourcedMips = FindCheckFacts(UnsourcedFacts, TEXT("texture"), TEXT("mips"));
+	const FAethelnContentCheckFacts* UnsourcedPbrChannels = FindCheckFacts(UnsourcedFacts, TEXT("texture"), TEXT("pbr_channels"));
+	TestTrue(TEXT("An invalid source records no mip facts"), UnsourcedMips != nullptr && UnsourcedMips->IntegerFacts.IsEmpty());
+	TestTrue(TEXT("An invalid source records no pbr_channels size"), UnsourcedPbrChannels != nullptr && UnsourcedPbrChannels->IntegerFacts.IsEmpty());
+	TestEqual(TEXT("An invalid source leaves mips unavailable"), CheckStatus(UnsourcedFacts, TEXT("texture"), TEXT("mips")), FString(TEXT("evidence_unavailable")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationSkeletalCollisionTest,
+	"Aetheln.Content.Validation.SkeletalMeshCollisionSource",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationSkeletalCollisionTest::RunTest(const FString& Parameters)
+{
+	// Like SKM_Quinn_Simple: no per-poly BodySetup, collision through the PhysicsAsset bodies.
+	USkeletalMesh* SkeletalMesh = NewObject<USkeletalMesh>(GetTransientPackage());
+	UPhysicsAsset* PhysicsAsset = NewObject<UPhysicsAsset>(GetTransientPackage());
+	PhysicsAsset->SkeletalBodySetups.Add(NewObject<USkeletalBodySetup>(PhysicsAsset));
+	SkeletalMesh->SetPhysicsAsset(PhysicsAsset);
+	TMap<FString, TArray<FAethelnContentCheckFacts>> Facts;
+	FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*SkeletalMesh, true, TEXT("fixture"), Facts);
+	const FAethelnContentCheckFacts* Profile = FindCheckFacts(Facts, TEXT("collision"), TEXT("profile"));
+	const FAethelnContentCheckFacts* Shapes = FindCheckFacts(Facts, TEXT("collision"), TEXT("simple_complex_policy"));
+	if (!TestNotNull(TEXT("The profile fact is recorded"), Profile) || !TestNotNull(TEXT("The simple_complex_policy fact is recorded"), Shapes))
+	{
+		return false;
+	}
+	TestTrue(TEXT("PhysicsAsset bodies are the collision source"), Profile->BooleanFacts.FindRef(TEXT("collision_source_present")));
+	TestEqual(TEXT("The shape count comes from the PhysicsAsset bodies"), Shapes->IntegerFacts.FindRef(TEXT("simple_shape_count")), int64{1});
+	TestEqual(TEXT("A PhysicsAsset-backed profile is unavailable, not failed"), CheckStatus(Facts, TEXT("collision"), TEXT("profile")), FString(TEXT("evidence_unavailable")));
+	TestEqual(TEXT("A PhysicsAsset-backed shape policy is unavailable, not failed"), CheckStatus(Facts, TEXT("collision"), TEXT("simple_complex_policy")), FString(TEXT("evidence_unavailable")));
+
+	// Neither PhysicsAsset bodies nor a BodySetup: still no collision source.
+	USkeletalMesh* Bare = NewObject<USkeletalMesh>(GetTransientPackage());
+	TMap<FString, TArray<FAethelnContentCheckFacts>> BareFacts;
+	FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*Bare, true, TEXT("fixture"), BareFacts);
+	TestEqual(TEXT("A skeletal mesh without a collision source fails"), CheckStatus(BareFacts, TEXT("collision"), TEXT("profile")), FString(TEXT("failed")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationBlueprintUncookedOnlyTest,
+	"Aetheln.Content.Validation.BlueprintUncookedOnlyDependencies",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationBlueprintUncookedOnlyTest::RunTest(const FString& Parameters)
+{
+	// The live classifier on CR_Mannequin_FootIK's Game script imports.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	for (const TCHAR* UncookedOnly : { TEXT("/Script/ControlRigDeveloper"), TEXT("/Script/RigVMDeveloper") })
+	{
+		const FAethelnEditorOnlyTarget Target = FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, UncookedOnly);
+		TestTrue(*FString::Printf(TEXT("%s is an UncookedOnly-only script package"), UncookedOnly), !Target.Reason.IsEmpty() && Target.bUncookedOnlyScript);
+	}
+	const FAethelnEditorOnlyTarget EditorOnly = FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd"));
+	TestTrue(TEXT("An Editor-module script package is PKG_EditorOnly, not UncookedOnly-only"), !EditorOnly.Reason.IsEmpty() && !EditorOnly.bUncookedOnlyScript);
+
+	FAethelnObservedPackage ControlRig;
+	ControlRig.PackageName = TEXT("/Game/Fixtures/CR_Fixture");
+	ControlRig.ClassPaths = { TEXT("/Script/ControlRigDeveloper.ControlRigBlueprint") };
+	ControlRig.HardDependencies = { TEXT("/Script/ControlRigDeveloper"), TEXT("/Script/Engine"), TEXT("/Script/RigVMDeveloper"), TEXT("/Script/UnrealEd") };
+	auto Classify = [&Registry](const FString& TargetPackage) { return FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TargetPackage); };
+	TArray<FString> Recorded;
+	TArray<FString> Failures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(ControlRig, Classify, Recorded);
+	const FString JoinedRecorded = FString::Join(Recorded, TEXT("\n"));
+	TestEqual(TEXT("A Blueprint package's UncookedOnly-only imports are recorded"), Recorded.Num(), 2);
+	TestTrue(TEXT("ControlRigDeveloper is recorded"), JoinedRecorded.Contains(TEXT("'/Script/ControlRigDeveloper'")));
+	TestTrue(TEXT("RigVMDeveloper is recorded"), JoinedRecorded.Contains(TEXT("'/Script/RigVMDeveloper'")));
+	TestTrue(TEXT("A Blueprint package's PKG_EditorOnly import still fails"), Failures.Num() == 1 && Failures[0].Contains(TEXT("'/Script/UnrealEd'")));
+
+	// Only a package whose every asset is a UBlueprint is stripped from the cook.
+	for (const TArray<FString>& ClassPaths : { TArray<FString>{ TEXT("/Script/Engine.StaticMesh") }, TArray<FString>{ TEXT("/Script/Engine.Blueprint"), TEXT("/Script/Engine.StaticMesh") }, TArray<FString>{} })
+	{
+		FAethelnObservedPackage Cooked = ControlRig;
+		Cooked.ClassPaths = ClassPaths;
+		Recorded.Reset();
+		Failures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(Cooked, Classify, Recorded);
+		const FString Classes = FString::Join(ClassPaths, TEXT(","));
+		TestTrue(*FString::Printf(TEXT("[%s] records nothing"), *Classes), Recorded.IsEmpty());
+		TestEqual(*FString::Printf(TEXT("[%s] fails every editor-only import"), *Classes), Failures.Num(), 3);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationMissingEditorOnlyTargetTest,
+	"Aetheln.Content.Validation.MissingEditorOnlyGameTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationMissingEditorOnlyTargetTest::RunTest(const FString& Parameters)
+{
+	// Like SK_Mannequin: an editor-only preview reference to an excluded template package.
+	FAethelnObservedPackage Package;
+	Package.PackageName = TEXT("/Game/Fixtures/SK_Fixture");
+	Package.HardDependencies = { TEXT("/Game/Fixtures/Governed"), TEXT("/Game/Fixtures/MissingHard"), TEXT("/Script/Engine") };
+	Package.SoftDependencies = { TEXT("/Game/Fixtures/MissingSoft") };
+	Package.EditorOnlyDependencies = { TEXT("/Game/Fixtures/GovernedPreview"), TEXT("/Game/Fixtures/SKM_MissingPreview"), TEXT("/Script/UnrealEd") };
+	TArray<FString> Recorded;
+	const TArray<FString> Failures = FAethelnContentValidationScanner::SelectBrokenGameReferences(
+		Package,
+		[](const FString& TargetPackage) { return TargetPackage == TEXT("/Game/Fixtures/Governed") || TargetPackage == TEXT("/Game/Fixtures/GovernedPreview"); },
+		Recorded);
+	const FString JoinedFailures = FString::Join(Failures, TEXT("\n"));
+	TestEqual(TEXT("Only missing runtime /Game targets fail"), Failures.Num(), 2);
+	TestTrue(TEXT("A missing hard Game target fails"), JoinedFailures.Contains(TEXT("'/Game/Fixtures/MissingHard'")));
+	TestTrue(TEXT("A missing soft Game target fails"), JoinedFailures.Contains(TEXT("'/Game/Fixtures/MissingSoft'")));
+	TestFalse(TEXT("A missing NotGame target does not fail"), JoinedFailures.Contains(TEXT("SKM_MissingPreview")));
+	TestTrue(TEXT("A missing NotGame target is recorded"), Recorded.Num() == 1 && Recorded[0].Contains(TEXT("'/Game/Fixtures/SKM_MissingPreview'")));
 	return true;
 }
 
