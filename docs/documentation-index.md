@@ -131,8 +131,8 @@ checked against the extracted PDF text, and the first page and the Order table
 were inspected visually. The character codex is 19 pages and the settlement
 codex is 11 pages. Canonical Markdown remains the source of truth when later
 edits occur; regenerate a codex with
-`node scripts/docs/render-codex-pdf.js <source.md> <out.pdf>`
-(`scripts/docs/render-codex-pdf.js`, which needs Node and Chrome or Edge).
+`node scripts/design/render-codex-pdf.js <source.md> <out.pdf>`
+(`scripts/design/render-codex-pdf.js`, which needs Node and Chrome or Edge).
 
 The earlier [character](../output/pdf/champions_of_the_first_cycle.pdf) and
 [settlement](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Renders a canonical Markdown document to a print-ready PDF codex.
 //
-// Usage: node scripts/docs/render-codex-pdf.js <source.md> <out.pdf>
+// Usage: node scripts/design/render-codex-pdf.js <source.md> <out.pdf>
 //
 // Needs: Windows (the Chrome and Edge paths below are Windows paths), Node 18+,
 // Chrome or Edge for the headless print, and network for the first `npx` fetch
@@ -53,7 +53,7 @@ blockquote { margin: 0.8em 0; padding-left: 1em; border-left: 3px solid #aaa; co
 
 const [src, out] = process.argv.slice(2);
 if (!src || !out) {
-  console.error("Usage: node scripts/docs/render-codex-pdf.js <source.md> <out.pdf>");
+  console.error("Usage: node scripts/design/render-codex-pdf.js <source.md> <out.pdf>");
   process.exit(2);
 }
 const srcPath = path.resolve(src);
