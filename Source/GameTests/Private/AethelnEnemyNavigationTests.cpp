@@ -3,6 +3,8 @@
 #include "AI/NavigationSystemBase.h"
 #include "ActorFactories/ActorFactory.h"
 #include "AethelnChainTestFixture.h"
+#include "AethelnCombatAttributeSet.h"
+#include "AethelnEnemyAttackAbility.h"
 #include "AethelnEnemyCharacter.h"
 #include "AethelnEnemyController.h"
 #include "Builders/CubeBuilder.h"
@@ -12,7 +14,10 @@
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "EngineUtils.h"
+#include "FileHelpers.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerStart.h"
 #include "Misc/AutomationTest.h"
 #include "NavMesh/NavMeshBoundsVolume.h"
 #include "NavMesh/RecastNavMesh.h"
@@ -207,6 +212,95 @@ bool FAethelnEnemyRealNavmeshTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("The reset brought the enemy home"), FVector::Dist(Enemy->GetActorLocation(), Home) < 1.0);
 		TestNull(TEXT("The reset dropped the target"), Controller->GetTarget());
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnEnemyPrototypeSpaceTest,
+	"Aetheln.GameCombat.EnemyAI.PrototypeSpace",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnEnemyPrototypeSpaceTest::RunTest(const FString& Parameters)
+{
+	// Replacing a world that holds a built RecastNavMesh makes the crowd manager log an engine warning as the mesh is torn
+	// down: for the world this test releases with NewBlankMap, and, if no earlier test has replaced it, for the Editor's
+	// startup world, which is this map. It reports engine teardown, not a defect. Count 0 requires it at least once, as
+	// E12 does, so the test fails if the mesh is not in the map; any other warning or error still fails the test.
+	// Running this test replaces the Editor's open map, and LoadMap can stop at a save prompt in an interactive Editor.
+	AddExpectedMessagePlain(TEXT("Unable to find RecastNavMesh instance while trying to create UCrowdManager instance"),
+		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+	// E14 (#83 P4): the prototype space itself. /Game/Maps/MovementPOC is loaded the way the Editor loads it, and the test
+	// reads what is saved in the map: one navigation bounds volume around the playable area, a built static RecastNavMesh,
+	// and one placed greybox enemy. The map is never saved, so nothing here changes it. A loaded editor world does not
+	// begin play, so the placed enemy is given its controller and begun by hand, as E12's fixture world does, to prove that
+	// what is saved in the map initialises as the document requires.
+	UWorld* World = UEditorLoadingAndSavingUtils::LoadMap(TEXT("/Game/Maps/MovementPOC"));
+	if (TestNotNull(TEXT("MovementPOC loads"), World))
+	{
+		TArray<ANavMeshBoundsVolume*> Volumes;
+		for (TActorIterator<ANavMeshBoundsVolume> It(World); It; ++It) { Volumes.Add(*It); }
+		TArray<ARecastNavMesh*> Meshes;
+		for (TActorIterator<ARecastNavMesh> It(World); It; ++It) { Meshes.Add(*It); }
+		TArray<AAethelnEnemyCharacter*> Enemies;
+		for (TActorIterator<AAethelnEnemyCharacter> It(World); It; ++It) { Enemies.Add(*It); }
+		TArray<APlayerStart*> Starts;
+		for (TActorIterator<APlayerStart> It(World); It; ++It) { Starts.Add(*It); }
+		TestEqual(TEXT("The map has one navigation bounds volume"), Volumes.Num(), 1);
+		TestEqual(TEXT("The map has one RecastNavMesh"), Meshes.Num(), 1);
+		TestEqual(TEXT("The map has one greybox enemy"), Enemies.Num(), 1);
+		TestEqual(TEXT("The map has one player start"), Starts.Num(), 1);
+		if (Volumes.Num() == 1 && Meshes.Num() == 1 && Enemies.Num() == 1 && Starts.Num() == 1)
+		{
+			const FBox Bounds = Volumes[0]->GetComponentsBoundingBox(true);
+			// The playable area is the floor inside the four perimeter walls (movement-poc.md), 5800 units square with its top at z = 0.
+			TestTrue(TEXT("The bounds volume covers the floor inside the walls"),
+				Bounds.IsInside(FVector(-2900.0, -2900.0, 0.0)) && Bounds.IsInside(FVector(2900.0, 2900.0, 0.0)));
+			TestTrue(TEXT("The bounds volume covers the player start"), Bounds.IsInside(Starts[0]->GetActorLocation()));
+			TestTrue(TEXT("The bounds volume covers the enemy"), Bounds.IsInside(Enemies[0]->GetActorLocation()));
+
+			ARecastNavMesh* Mesh = Meshes[0];
+			TestTrue(TEXT("The mesh is static, built in the Editor"), Mesh->GetRuntimeGenerationMode() == ERuntimeGenerationType::Static);
+			TestTrue(TEXT("The mesh was saved with built tiles"), Mesh->GetNavMeshTilesCount() > 0);
+
+			UNavigationSystemV1* Navigation = UNavigationSystemV1::GetCurrent(World);
+			if (TestNotNull(TEXT("The loaded world has a navigation system"), Navigation))
+			{
+				FNavLocation Projected;
+				TestTrue(TEXT("The enemy stands on the mesh"), Navigation->ProjectPointToNavigation(Enemies[0]->GetActorLocation(), Projected, FVector(100.0, 100.0, 200.0)));
+				TestTrue(TEXT("The player start stands on the mesh"), Navigation->ProjectPointToNavigation(Starts[0]->GetActorLocation(), Projected, FVector(100.0, 100.0, 200.0)));
+				const UNavigationPath* Path = UNavigationSystemV1::FindPathToLocationSynchronously(World, Enemies[0]->GetActorLocation(), Starts[0]->GetActorLocation(), Enemies[0]);
+				if (TestNotNull(TEXT("A path query from the enemy to the player start returns a path"), Path))
+				{
+					TestTrue(TEXT("The path from the enemy to the player start is valid"), Path->IsValid());
+					TestFalse(TEXT("The path from the enemy to the player start is complete, not partial"), Path->IsPartial());
+				}
+			}
+
+			// Initialisation: the saved enemy is the production class with its controller, and begins play as the document requires.
+			AAethelnEnemyCharacter* Enemy = Enemies[0];
+			TestTrue(TEXT("The placed enemy is the production class"), Enemy->GetClass() == AAethelnEnemyCharacter::StaticClass());
+			TestTrue(TEXT("The enemy uses the enemy controller class"), Enemy->AIControllerClass == AAethelnEnemyController::StaticClass());
+			TestTrue(TEXT("The enemy is possessed when placed in the world"), Enemy->AutoPossessAI == EAutoPossessAI::PlacedInWorldOrSpawned);
+			const FTransform Placed = Enemy->GetActorTransform();
+			// An Editor-loaded world never initialises its actors, so the pawn's components are registered but not initialised;
+			// the possession refresh of its ability system needs the owner and avatar that InitializeComponent sets. A game
+			// world initialises them as the world starts, so the test does what that start does.
+			Enemy->PreInitializeComponents();
+			Enemy->InitializeComponents();
+			Enemy->PostInitializeComponents();
+			Enemy->SpawnDefaultController();
+			TestTrue(TEXT("The enemy controller possesses the enemy"), Cast<AAethelnEnemyController>(Enemy->GetController()) != nullptr);
+			Enemy->DispatchBeginPlay();
+			TestTrue(TEXT("Home is the placed transform"), Enemy->GetHome().Equals(Placed, 0.01f));
+			UAethelnAbilitySystemComponent* AbilitySystem = Enemy->GetAethelnAbilitySystemComponent();
+			const FAethelnCombatAttributeInitValues& Initial = Enemy->ProvisionalInitialAttributes;
+			TestTrue(TEXT("The provisional enemy Health is configured"), Initial.Health > 0.0f);
+			TestEqual(TEXT("The enemy has its initial Health"), AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), Initial.Health);
+			TestTrue(TEXT("The enemy attack is granted"), AbilitySystem->GetActivatableAbilities().ContainsByPredicate(
+				[](const FGameplayAbilitySpec& Spec) { return Cast<UAethelnEnemyAttackAbility>(Spec.Ability) != nullptr; }));
+		}
+	}
+	// Release the map without saving it.
+	UEditorLoadingAndSavingUtils::NewBlankMap(false);
 	return true;
 }
 

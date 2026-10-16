@@ -7,7 +7,7 @@ This is the implementation specification for
 server-authoritative enemy AI and navigation foundation that
 [Issue #20](https://github.com/ShayShimoni/aetheln-online/issues/20) needs for
 the prototype's one enemy. It is phase P1 of the issue and contains no code.
-Pull requests P2 and P3 deliver it (see [Phased Delivery](#phased-delivery)).
+Pull requests P2, P3, and P4 deliver it (see [Phased Delivery](#phased-delivery)).
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -29,8 +29,10 @@ and a change to any authoritative step field bumps the attack's
 `ContentVersion`. The config is each value's only place: no test supplies the
 provisional values and this document repeats none. Scenario tests override single
 instance values and derive expectations from the step geometry, so a re-tune must
-update those expectations in the same change. Two groups of keys gate the enemy, so a key that is
-unset, zero, or invalid fails closed:
+update those expectations in the same change.
+
+Two groups of keys gate the enemy, so a key that is unset, zero, or invalid fails
+closed:
 
 - The attack ability's `ContentVersion`, step values, and sampling bounds. Unset,
   the ability's grant is refused, and the enemy never attacks.
@@ -73,7 +75,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the enemy, its attack lifecycle, and the target-choice mechanism. | Choose the final target rule, threat, telegraph content, or the completion result. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Binds the same lethal notification #21 binds. | Player death, respawn, or reconnect. #83 never applies `State.Dead` itself (see [Death and Reset](#death-and-reset)). |
 | [#84](https://github.com/ShayShimoni/aetheln-online/issues/84) | Owns the server `Telegraph` state and replicates it in `FAethelnEnemyPresentationState`; the #84 binding's telegraph and wind-up only visualize that state and the step's phases. | Montages, sockets, notifies, or the authoring pipeline. |
-| [#120](https://github.com/ShayShimoni/aetheln-online/issues/120) | Names the navigation data the prototype space needs in `MovementPOC`, which the `navigation` content-validation family reviews. P3 adds none (see [Residual Risks](#residual-risks)). | Change the content-validation gate. |
+| [#120](https://github.com/ShayShimoni/aetheln-online/issues/120) | Names the navigation data the prototype space needs in `MovementPOC`, which the `navigation` content-validation family reviews. P4 adds them (see [Navigation](#navigation)). | Change the content-validation gate. |
 | [#45](https://github.com/ShayShimoni/aetheln-online/issues/45) | Records measurements (navmesh build time and size, server frame cost with the enemy). | Set budgets, thresholds, or population assumptions. |
 | [#96](https://github.com/ShayShimoni/aetheln-online/issues/96), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | Uses the existing placeholder capsule and mannequin only. | Enemy art, animation, or effects. |
 | [#107](https://github.com/ShayShimoni/aetheln-online/issues/107) | Names every tuning key. | Choose any value. |
@@ -306,11 +308,12 @@ when the arena gains cover.
 - One `NavMeshBoundsVolume` covers the arena floor. The `RecastNavMesh` uses
   static runtime generation, is built in the editor, and is saved with the
   map. The arena has no dynamic obstacles, doors, or streaming, so no runtime
-  rebuild is needed. P3 does not add them to `MovementPOC.umap`: that is a
-  lockable LFS binary ([Source Control](source-control.md)), and the volume, the
-  built mesh, and the placed enemy need an Editor session under that lock. The
-  mesh and the enemy walking on it are proven on a built headless arena instead
-  (E12, [Measurements](#measurements)).
+  rebuild is needed. P4 adds them to `MovementPOC.umap`, a lockable LFS binary
+  ([Source Control](source-control.md)): the volume, the built mesh, and the one
+  placed enemy, saved under the lock. They were authored headless, with the
+  `AethelnPrototypeSpaceAuthoring` commandlet (see [Authoring the map](#authoring-the-map)).
+  P3 proved the mesh and the enemy walking on it on a built headless arena
+  instead (E12, [Measurements](#measurements)); E14 proves the saved map itself.
 - Only the server queries navigation. Clients see enemy movement through
   character movement replication.
 - `MovementPOC` is governed content. Its navigation data falls under the #120
@@ -319,9 +322,60 @@ when the arena gains cover.
   a producer binds governed navigation packages to exact client and server
   cook evidence and the pinned-Editor tests have run
   ([Asset Intake and Content Validation](asset-intake-and-content-validation.md)).
-  P3 names this gate in its evidence and does not claim the family passes.
-  Whether the client cook can drop the navigation data stays open for #120.
-- Navmesh generation time, tile count, and memory are recorded in P3 for #45.
+  P4 changes the map, so it follows the #120 map-change rules (see
+  [#120 review of the map change](#120-review-of-the-map-change)) and does not
+  claim the family passes. Whether the client cook can drop the navigation data
+  stays open for #120.
+- Navmesh generation time, tile count, and memory are recorded in P3 for #45,
+  and the `MovementPOC` mesh's build time and tile count in P4
+  ([Measurements](#measurements)).
+
+### Authoring the map
+
+The map is authored headless, because the Editor may be open and an Editor
+session on a binary map cannot be merged. `UAethelnPrototypeSpaceAuthoringCommandlet`
+(`Source/GameTests`, Editor module) loads `/Game/Maps/MovementPOC` and adds the
+`NavMeshBoundsVolume` (a box over the whole floor), the `RecastNavMesh` (the
+navigation build creates it), and one `AAethelnEnemyCharacter` on open floor, then
+saves the map. It refuses a map that already has any of the three. Take the LFS
+lock on `Content/Maps/MovementPOC.umap` first, run it under the engine lock, then
+update the registry hash (see below):
+
+```powershell
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe') $AethelnProject `
+  -run=AethelnPrototypeSpaceAuthoring -unattended -nop4 -nullrhi
+```
+
+The box size and the enemy position are fixture geometry (the course is described
+in [Movement POC](movement-poc.md)), not tuning. E14 pins them by what they must
+do: the volume covers the floor inside the walls, the enemy and the player start
+stand on the mesh, and a complete path joins them.
+
+### #120 review of the map change
+
+`MovementPOC` is a governed runtime package, so changing it is a content change
+under [Asset Intake and Content Validation](asset-intake-and-content-validation.md):
+
+- Lock before editing, and release after the PR merges (the lock is released
+  only then so that nobody saves the map in between).
+- The registry record (`Config/ContentValidation/runtime-asset-intake.json`)
+  carries the new exact LFS object SHA-256 in both places, a new content version
+  because the map's behavior changed (the source group's own rule: review every
+  resulting hash as a new content version), and the change in the source group's
+  `modifications`. The registry check fails closed on a stale hash.
+- The map stays `temporary_prototype` and `client_only`: nothing here is
+  production approval, and the dedicated server's `ServerDefaultMap` is still
+  `StarterMap`. Whether a map that now carries server-relevant navigation data
+  and an enemy keeps the `client_only` audience is open for #120 and is recorded
+  in [Open Decisions](#open-decisions).
+- The content validation run (`scripts/content/Invoke-ContentValidation.ps1`)
+  now finds a navigation data actor in the map, so the `navigation` family
+  becomes applicable instead of `not_applicable`. It stays `non_promotion`: the
+  navigation audience evidence is unavailable and the quantitative policy is
+  `TBD`. This PR does not claim the family passes.
+  The run on the P4 head: result `non_promotion`, 51 governed packages, 108
+  findings, 0 errors, and the `navigation` family reported `non_promotion` for
+  `MovementPOC` (`content.navigation.non_promotion`, evidence unavailable).
 
 ### Movement
 
@@ -450,6 +504,7 @@ same fixtures. Every test is written red first. Test names are under
 | E11 | P2 | Leash (`TargetLoss`): a target outside the leash is dropped, and the enemy returns home and is restored. |
 | E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. The fixture world does not run the scheduled ticks of the enemy's movement and path following components, so the test ticks both by hand (residual risk 4). |
 | E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link. Under a fixture impairment (100 ms lag, 5 % loss) it requires the attack (not the telegraph), Health, death, and reset, and only bounds the cue count, which is unreliable. Not the #45 network profiles. |
+| E14 | P4 | The prototype space (`PrototypeSpace`): the saved `MovementPOC` loads in the Editor world and holds one navigation bounds volume that covers the floor inside the walls, the player start, and the enemy; one static `RecastNavMesh` saved with built tiles; and one placed `AAethelnEnemyCharacter` that is the production class with the enemy controller class, possesses on spawn, and, begun by hand because a loaded Editor world does not begin play, has its home, its initial Health, and its granted attack. The enemy and the player start stand on the mesh, and a complete (not partial) path query joins them. The test never saves the map. An Editor-loaded world does not initialise its actors, so the test also runs the component initialisation a game world performs before it spawns the controller, and it requires, and so ignores, the engine's `UCrowdManager` teardown warning that a world holding a built `RecastNavMesh` logs when it is replaced; any other warning still fails it. |
 | C1 | P3 | Config (`ProvisionalConfig`): every promoted value is in `Config/DefaultGame.ini` and reaches the class defaults. |
 
 ## Measurements
@@ -477,6 +532,21 @@ decisions. They say nothing about a real map, several enemies, a client load, or
 packaged server; #45 owns those. The raw logs are in the issue's delivery
 evidence (`issue-83-p3`).
 
+### MovementPOC mesh (P4)
+
+Recorded by P4 on the same machine, from the authoring commandlet's
+`AETHELN_MEASURE` line (headless Editor, no rendering). The map is the 6000 unit
+square course (`NavMeshBoundsVolume` of 6000 by 6000 by 600 units), the engine's
+default agent (radius 35), static runtime generation. These are measurements, not
+budgets.
+
+| What | Value |
+| --- | --- |
+| Navigation build, wall time | 43.0 ms |
+| Tiles in the mesh, and tiles holding data | 147, and 40 |
+
+The raw logs are in the issue's delivery evidence (`issue-83-p4`).
+
 ## Acceptance-Criteria Mapping
 
 | #83 criterion | Covered by |
@@ -487,8 +557,8 @@ evidence (`issue-83-p3`).
 | Readable telegraph, wind-up, active, recovery, interruption, death, and reset states without notifies | State machine and replication; E3, E4, E5, E8 |
 | Minimum replication; clients cannot drive AI or contact | [Replication](#replication), [Server-Only Execution](#server-only-execution); E1, E8 |
 | Tests for target loss, unreachable paths, invalid commands, interruption ordering, death and reset, two-player contention, server-only execution | E1-E11 |
-| DoD: one greybox enemy navigates and attacks in the prototype space | P3 on the provisional values: E12 (headless arena) and E13. The enemy placed in `MovementPOC.umap` is P4 (residual risk 7), so this box stays open after P3. |
-| DoD: focused automation and repeatable multiplayer evidence | E1-E13 |
+| DoD: one greybox enemy navigates and attacks in the prototype space | On the provisional values: E12 (headless arena) and E13 in P3, and in P4 the enemy, the bounds volume, and the built mesh in `MovementPOC.umap` itself (E14). E14 does not show the enemy moving or attacking in `MovementPOC`; that is a later evidence item. The box stays open until a post-merge QA round on the `develop` revision shows the enemy navigating and attacking there, never because P4 merged. That round needs the #107 player values applied by the issue that owns them, or a recorded fixture method: in a real session the enemy stays Idle until the player initial attributes exist (open decision 10). |
+| DoD: focused automation and repeatable multiplayer evidence | E1-E14 |
 | DoD: budgets stay with #45 | Measurements only, P3 |
 
 ## Phased Delivery
@@ -504,13 +574,16 @@ evidence (`issue-83-p3`).
    Health: the #61 change already provides it, so P3 needs no replication
    change. The navmesh volume and the enemy in `MovementPOC.umap` moved to P4.
 4. **P4, prototype space in the map**: a `NavMeshBoundsVolume`, a built
-   `RecastNavMesh`, and the placed enemy in `MovementPOC.umap` (an Editor session
-   under the LFS lock), then the #120 `navigation` content-validation review.
-   The lead deferred it from P3 to this named package, a delivery-order decision
-   under the standing lead authority
+   `RecastNavMesh`, and the placed enemy in `MovementPOC.umap`, saved under the LFS
+   lock by the headless authoring commandlet, E14, the registry update, and the
+   #120 map-change review (see [Navigation](#navigation)). The lead deferred it
+   from P3 to this named package, a delivery-order decision under the standing
+   lead authority
    ([PR 355 review](https://github.com/ShayShimoni/aetheln-online/pull/355#issuecomment-6158560412));
-   the owner's choice of `MovementPOC` is unchanged. #83 stays In Progress until
-   P4 merges.
+   the owner's choice of `MovementPOC` is unchanged. P4 does not close the DoD
+   box for the enemy in the prototype space: E14 does not show the enemy moving
+   or attacking in `MovementPOC`, and the box stays open until a post-merge QA
+   round on `develop` does (see the mapping above).
 
 ## Open Decisions
 
@@ -541,10 +614,21 @@ which the feel test re-tunes.
 8. **Prototype space:** resolved. `MovementPOC` (owner decision on #83). Whether
    `ServerDefaultMap` follows is a separate decision.
 9. **Navigation data in the client cook** (#120).
-10. **Player initial attributes** (#107): `AAethelnPlayerState` stays at zero in
-    config, and an eligible target needs Health above zero, so in a real session
-    the enemy has no eligible player until those values exist. E13 applies
-    fixture values by hand. The interactive two-client run is blocked on it.
+10. **Player initial attributes** (#107): decided by the owner as provisional
+    values on
+    [#107](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6176507597)
+    (2026-10-14); this document does not restate them. They are not applied yet:
+    `AAethelnPlayerState` stays at zero in config, and P4 applies nothing because
+    E14 needs no live player. The config change stays with the issue that owns the
+    player attribute defaults. An eligible target needs Health above zero, so until
+    that change lands the enemy placed in `MovementPOC` stands Idle at home and
+    targets no real player. E13 applies fixture values by hand. The interactive
+    two-client run waits on it.
+11. **`MovementPOC` audience** (#120): the registry lists the map as
+    `client_only`, which was true while it held only client-side course
+    geometry. It now carries navigation data and a server-driven enemy, and
+    `ServerDefaultMap` is still `StarterMap`. Whether the audience changes, and
+    when, is #120's decision with the `ServerDefaultMap` one.
 
 ## Residual Risks
 
@@ -562,18 +646,20 @@ which the feel test re-tunes.
 5. An enemy whose every path request fails resets at most once per pass while
    a target stays eligible. E9 still shows this with no navigation data; the
    built-mesh run (E12) reaches its target and shows no such fast loop, so P3
-   adds no back-off. A slower cycle remains where a target stays eligible behind
+   adds no back-off. `MovementPOC` now has a built mesh (P4), so on that map a
+   target on the mesh draws no failed request; the fast case remains only on a
+   map with no navigation data, where no enemy is placed. A slower cycle remains where a target stays eligible behind
    an obstacle the mesh does not know: the enemy is blocked, repaths, is blocked,
    resets home, then Idle engages again, once per block-detection window (about
    5 s each). Whether that needs a back-off or a different give-up is a #20
    behavior to decide, with #45.
 6. Several enemies advance in the order they bound to the pass. Their steps'
    ordinals follow that order, which decides exact-time ties.
-7. `MovementPOC.umap` has no `NavMeshBoundsVolume`, no built `RecastNavMesh`,
-   and no placed enemy, so the greybox enemy is not yet in the prototype space
-   itself. Adding them is an Editor session on a lockable LFS binary
-   ([Source Control](source-control.md)), then the #120 `navigation`
-   content-validation review. `ServerDefaultMap` also still names
-   `StarterMap`. Until P4, on that map a target between the attack range and
-   the perception radius starts the failed-path reset of risk 5, which E12 shows
-   only does not loop on a built mesh.
+7. `MovementPOC.umap` carries the `NavMeshBoundsVolume`, the built
+   `RecastNavMesh`, and the placed enemy since P4, but `ServerDefaultMap` still
+   names `StarterMap`, so a dedicated server does not load the map by default;
+   E13 runs on CQTest's generated map. The #120 `navigation` family stays
+   `non_promotion` (see [#120 review of the map change](#120-review-of-the-map-change)).
+   On a built mesh a target between the attack range and the perception radius
+   draws no fast failed-path loop (E12); Risk 5 records the slower blocked-and-reset
+   cycle that remains.
