@@ -248,14 +248,14 @@ bool FAethelnTargetIdOrderingTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Link press starts the next step"), F.Press(), EResult::Accepted);
 		F.AdvanceTo(0.75);
 		TestTrue(TEXT("Combat ids follow registration order, not first sweep discovery"),
-			F.Timeline->GetOrAssignCombatId(*FirstAsc) < F.Timeline->GetOrAssignCombatId(*SecondAsc));
+			F.Timeline->GetCombatIdForTests(*FirstAsc) != 0 && F.Timeline->GetCombatIdForTests(*FirstAsc) < F.Timeline->GetCombatIdForTests(*SecondAsc));
 		if (TestEqual(*FString::Printf(TEXT("MaxTargets %d: results of both activations"), MaxTargets), F.Results.Num(), 1 + MaxTargets))
 		{
-			TestEqual(TEXT("The first resolved result is the lower combat id"), F.Results[1].TargetCombatId, F.Timeline->GetOrAssignCombatId(*FirstAsc));
+			TestEqual(TEXT("The first resolved result is the lower combat id"), F.Results[1].TargetCombatId, F.Timeline->GetCombatIdForTests(*FirstAsc));
 			if (MaxTargets == 2)
 			{
 				TestEqual(TEXT("The two contacts tie exactly"), F.Results[1].ContactTime, F.Results[2].ContactTime);
-				TestEqual(TEXT("The higher combat id resolves second"), F.Results[2].TargetCombatId, F.Timeline->GetOrAssignCombatId(*SecondAsc));
+				TestEqual(TEXT("The higher combat id resolves second"), F.Results[2].TargetCombatId, F.Timeline->GetCombatIdForTests(*SecondAsc));
 			}
 		}
 		TestEqual(TEXT("The lower id takes the contested slot"), Health(*First), 35.0f);
@@ -440,9 +440,10 @@ bool FAethelnAvoidanceDefenseAndRelationTest::RunTest(const FString& Parameters)
 		FAttacker Ally;
 		if (!F.SpawnAttacker(*this, Ally, FVector(60.0, 0.0, 0.0), 0.0)) { return false; }
 		const float AllyHealth = Ally.Player.AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute());
+		const int32 CandidatesBefore = F.Timeline->GetCandidateCountForTests();
 		F.Press(); F.AdvanceTo(0.5);
 		// The row only means something if the sweep found the ally: otherwise "nothing" is a miss, not the relation.
-		TestTrue(TEXT("The sweep found the ally, so the relation is what rejects it"), F.Timeline->GetCandidateCountForTests() > 0);
+		TestTrue(TEXT("The sweep found the ally, so the relation is what rejects it"), F.Timeline->GetCandidateCountForTests() > CandidatesBefore);
 		TestEqual(TEXT("A player target yields nothing (OQ1)"), F.Results.Num(), 0);
 		TestEqual(TEXT("The ally takes no damage"), Ally.Player.AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), AllyHealth);
 		TestFalse(TEXT("Players are allies"), UAethelnCombatTimelineSubsystem::IsHostile(*F.Player.AbilitySystem, *Ally.Player.AbilitySystem));

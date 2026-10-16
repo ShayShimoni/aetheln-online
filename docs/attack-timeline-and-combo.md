@@ -601,10 +601,12 @@ targets are swept where they are at `Now`.
 Candidates sort by contact time, then activation ordinal (a server-global
 counter issued at step start, unique across connections and AI), then result
 slot (always 0 for the chain: one active window per step), then target combat
-id (a server-issued id per ASC, taken when the ASC registers on the server, so it follows spawn order and never the physics hit order of the sweep that first finds the target). This is the canonical key (Damage Families and
-Deterministic Defense in the combat document) without the periodic-effect
-terms, which melee does not use. A second candidate with the same activation
-and target is a duplicate.
+id (a server-issued id per ASC, taken when the ASC registers on the server, so
+it follows the registration order of the ASC's owner and never the physics hit
+order of the sweep that first finds the target). This is the canonical key
+(Damage Families and Deterministic Defense in the combat document) without the
+periodic-effect terms, which melee does not use. A second candidate with the
+same activation and target is a duplicate.
 
 ### Resolution order (prototype subset)
 
@@ -1074,7 +1076,7 @@ loss, which is a test setting and not a #44 catalog kind or the #45 profile.
 | A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; an avatar destroyed without unpossession is not swept and its chain ends once with `AvatarLost` at the next pass; a new PlayerState starts with no chain or seam state |
 | A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered. The lethal row, recorded from #21 P1 (a case, not a test): a lethal contact in the same frame before a buffered step's `S + LinkOpen` does not cancel that start. The step starts, and the pass sends its held record before it raises `OnLethalResult`, so the record reaches the owner as presentation only. Death then ends the chain once with `IncompatibleState`. Since #21 P2 that end is stamped at the lethal contact time (`OnLethalResult` carries `ContactTime` since #83 P2; `Aetheln.GameCombat.Death.LethalContactThenRespawn` asserts the stamp), but the stamp does not recall a record already sent. Cancelling the start as for interruption would need the lethal notification before the held-record send, a change to this pass's emission order that stays with #60 |
 | A29 | `Aetheln.GameCombat.AttackTimeline.ChainStartFailures` | P4 | H | A chain press that commits and whose step then cannot start reports `InternalFailure`, keeps its spent cost, advances the accepted sequence, and a replay is `DuplicateSequence` with no second spend; a client-mode world creates no subsystem, refuses registration, runs no pass, and commits no press |
-| A30 | `Aetheln.GameCombat.AttackTimeline.TargetIdOrdering` | P7 | H | Two dummies overlap the shape at the same step start, so their contact times and activation ordinal tie exactly. The one spawned first, swept only from the second activation, resolves first and takes the only slot at `MaxTargets = 1`; at `MaxTargets = 2` both are hit in ascending combat id. The target combat id follows registration order (the ASC takes it when it registers on the server), not the physics hit order of the sweep that first finds it |
+| A30 | `Aetheln.GameCombat.AttackTimeline.TargetIdOrdering` | P7 | H | Two dummies overlap the shape at the same step start, so their contact times and activation ordinal tie exactly. The one spawned first, swept only from the second activation, resolves first and takes the only slot at `MaxTargets = 1`; at `MaxTargets = 2` both are hit in ascending combat id. The target combat id follows the registration order of the ASC's owner (the PlayerState for players, the pawn for enemies; the ASC takes the id when it registers on the server), not the physics hit order of the sweep that first finds it |
 
 CI ran a frozen two-test filter until #237 widened it to every declared
 `Aetheln.` test, so each code PR records local automation evidence at its exact
