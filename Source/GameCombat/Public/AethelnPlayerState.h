@@ -31,8 +31,12 @@ public:
 	AAethelnPlayerState();
 
 	virtual void PostInitializeComponents() override;
-	/** A logout carries this player's state across the disconnect grace window (#21 P4). */
-	virtual void Destroyed() override;
+	/**
+	 * A logout (CleanupPlayerState). Inside the disconnect grace window this PlayerState stays, inactive and unowned, with its pawn,
+	 * until the player reconnects or the window ends (#21 P4b, UAethelnDeathSubsystem::RetainForGrace). Otherwise the engine
+	 * default destroys it.
+	 */
+	virtual void OnDeactivated() override;
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	/** The movement authority (#18 T1) forwards to the ASC, which resolves the current grant and possessed avatar. */
@@ -50,12 +54,25 @@ public:
 	static FAethelnHudActionOutcome ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result);
 
 	/**
-	 * Server only (#21 P4). The key under which a logout stores this player's state and a reconnect takes it back. Set
-	 * by the game mode at login (AAethelnCombatGameMode::ResolveReconnectKey); empty means no carry. Never replicated
-	 * and never set by a client RPC.
+	 * Server only (#21 P4, P4b). The key under which a logout keeps this player and a reconnect takes it back. Set by the
+	 * game mode at login (AAethelnCombatGameMode::InitNewPlayer); empty means no carry. Never replicated and never set by a
+	 * client RPC.
 	 */
 	void SetReconnectKey(const FString& Key) { ReconnectKey = Key; }
 	const FString& GetReconnectKey() const { return ReconnectKey; }
+
+	/** Server only: abilities granted and the first attributes applied, at the first possession. */
+	bool IsCombatStateInitialized() const { return bCombatStateInitialized; }
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	/**
+	 * Server only (#21 P4b). Marks this PlayerState kept for the grace window: inactive, and out of the server's player list
+	 * and, through bKeptForGrace, every client's. The engine's own bIsInactive replicates only in the initial bunch
+	 * (COND_InitialOnly, PlayerState.cpp:440-443), so a client that already holds this PlayerState would never see it.
+	 */
+	void MarkKeptForGrace();
+	bool IsKeptForGrace() const { return bKeptForGrace; }
 
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
@@ -93,6 +110,14 @@ public:
 private:
 	UFUNCTION()
 	void HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn);
+
+	/** Clients: a kept PlayerState becomes inactive here too, which takes it out of the local player list (OnRep_bIsInactive). */
+	UFUNCTION()
+	void OnRep_KeptForGrace();
+
+	/** See MarkKeptForGrace. Replicated to every client; never set by a client. */
+	UPROPERTY(ReplicatedUsing = OnRep_KeptForGrace)
+	bool bKeptForGrace = false;
 
 	FAethelnHudActionOutcomeDelegate HudActionOutcome;
 

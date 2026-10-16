@@ -6,8 +6,10 @@
 #include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayAbility.h"
 #include "AethelnGameplayTags.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameplayEffect.h"
+#include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityAvatar, Log, All);
@@ -59,16 +61,34 @@ void AAethelnPlayerState::PostInitializeComponents()
 	});
 }
 
-void AAethelnPlayerState::Destroyed()
+void AAethelnPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
-	// A logout destroys the PlayerState. Destroyed() runs for every destroy, before the actor ends play and before its components
-	// unregister, so the ASC still holds its attributes and effects. EndPlay would not do: an actor that never began play skips it.
-	// A player who never took a first possession has nothing to carry (its attributes were never initialized).
-	if (HasAuthority() && bCombatStateInitialized && !ReconnectKey.IsEmpty())
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AAethelnPlayerState, bKeptForGrace);
+}
+
+void AAethelnPlayerState::MarkKeptForGrace()
+{
+	bKeptForGrace = true;
+	SetIsInactive(true);
+	if (AGameStateBase* GameState = GetWorld() != nullptr ? GetWorld()->GetGameState() : nullptr) { GameState->RemovePlayerState(this); }
+}
+
+void AAethelnPlayerState::OnRep_KeptForGrace()
+{
+	// The engine's handler removes it from the local list and re-adds it only while active (GameStateBase.cpp:122-130).
+	SetIsInactive(bKeptForGrace);
+	OnRep_bIsInactive();
+}
+
+void AAethelnPlayerState::OnDeactivated()
+{
+	// The controller's CleanupPlayerState calls this at logout (PlayerController.cpp:1392-1398). The kept PlayerState keeps its
+	// ASC, effects and respawn wait running, so the kept pawn stays attackable; the reconnect takes its state (P4b).
+	if (!UAethelnDeathSubsystem::RetainForGrace(*this))
 	{
-		UAethelnDeathSubsystem::CaptureCarriedState(*AbilitySystemComponent, ReconnectKey);
+		Super::OnDeactivated();
 	}
-	Super::Destroyed();
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const

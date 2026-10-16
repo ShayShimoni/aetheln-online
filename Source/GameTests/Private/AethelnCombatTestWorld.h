@@ -6,6 +6,7 @@
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatEffects.h"
 #include "AethelnCombatTestAbilities.h"
+#include "AethelnPlayerController.h"
 #include "AethelnPlayerState.h"
 #include "CoreMinimal.h"
 #include "Engine/Engine.h"
@@ -208,7 +209,8 @@ namespace AethelnCombatTests
 		{
 			return false;
 		}
-		OutPlayer.Controller = TestWorld.Spawn<APlayerController>();
+		// The combat game mode's controller class, so a destroyed controller takes the production logout path (#21 P4b).
+		OutPlayer.Controller = TestWorld.Spawn<AAethelnPlayerController>();
 		if (!Test.TestNotNull(TEXT("Player controller exists"), OutPlayer.Controller))
 		{
 			return false;

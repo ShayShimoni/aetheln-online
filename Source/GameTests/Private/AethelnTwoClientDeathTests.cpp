@@ -7,6 +7,7 @@
 #include "AethelnCombatTimelineSubsystem.h"
 #include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayTags.h"
+#include "AethelnLocalPlayer.h"
 #include "AethelnPlayerState.h"
 #include "Components/PIENetworkComponent.h"
 #include "Engine/NetConnection.h"
@@ -44,6 +45,8 @@ namespace AethelnTwoClientDeathTests
 		int32 ServerCues = 0;
 		int32 ClientCues[2] = { 0, 0 };
 		bool bClientCueBound[2] = { false, false };
+		FString ServerKeys[2];
+		TWeakObjectPtr<UAethelnAbilitySystemComponent> ServerKept;
 	};
 
 	UAethelnAbilitySystemComponent* ServerAbilitySystem(const FState& Server, int32 ClientIndex)
@@ -80,13 +83,40 @@ namespace AethelnTwoClientDeathTests
 			&& AbilitySystem->GetAvatarActor() == Pawn && !AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
 	}
 
-	void QueueTwoClientDeathAndRespawn(FAutomationTestBase& Test, const FPacketSimulationSettings* Impairment)
+	void ExpectUnsavedMapWarnings(FAutomationTestBase& Test)
 	{
 		// CQTest plays a new unsaved map, whose level and world settings have no stable package path for the net GUID cache.
 		Test.AddExpectedMessage(TEXT("FNetGUIDCache::SupportsObject: Level /Temp/UEDPIE_\\d+_Untitled_\\d+\\.Untitled:PersistentLevel NOT Supported"), ELogVerbosity::Warning,
 			EAutomationExpectedMessageFlags::Contains, 0);
 		Test.AddExpectedMessage(TEXT("RegisterNetGUID_Client: Guid with pathname\\. FullNetGUIDPath: \\[\\d+\\]WorldSettings"), ELogVerbosity::Warning,
 			EAutomationExpectedMessageFlags::Contains, 0);
+	}
+
+	/** Queues the run's steps, CQTest's teardown, and a bounded wait for the editor to end the PIE session. */
+	void EnqueueWithTeardown(const TSharedRef<FRun>& Run, const FTimespan& Timeout)
+	{
+		FAutomationTestFramework& Framework = FAutomationTestFramework::Get();
+		Framework.EnqueueLatentCommand(Run->Builder.Build());
+		Framework.EnqueueLatentCommand(Run->Builder.BuildTearDown());
+		// Wait for the editor to end the PIE session, then release the run (the last reference to the lambdas' state).
+		// Bounded like CQTest's own steps, so a PIE session that never ends fails this test by name instead of the suite timeout.
+		Framework.EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>([Run, Timeout, Start = TOptional<FDateTime>()]() mutable
+		{
+			if (!Start.IsSet()) { Start = FDateTime::UtcNow(); }
+			bool bPieEnded = true;
+			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+			{
+				bPieEnded &= !(Context.WorldType == EWorldType::PIE && Context.World() != nullptr);
+			}
+			if (!bPieEnded && FDateTime::UtcNow() - Start.GetValue() < Timeout) { return false; }
+			if (!bPieEnded) { Run->Test.AddError(FString::Printf(TEXT("%s: PIE did not end within %.0f s after the teardown"), *Run->Test.GetTestFullName(), Timeout.GetTotalSeconds())); }
+			return true;
+		}));
+	}
+
+	void QueueTwoClientDeathAndRespawn(FAutomationTestBase& Test, const FPacketSimulationSettings* Impairment)
+	{
+		ExpectUnsavedMapWarnings(Test);
 		const TSharedRef<FRun> Run = MakeShared<FRun>(Test);
 		FNetworkComponentBuilder<FState> NetworkBuilder;
 		NetworkBuilder.WithClients(2).AsDedicatedServer().WithGameMode(AAethelnCombatGameMode::StaticClass());
@@ -219,23 +249,167 @@ namespace AethelnTwoClientDeathTests
 				}
 			});
 
-		FAutomationTestFramework& Framework = FAutomationTestFramework::Get();
-		Framework.EnqueueLatentCommand(Run->Builder.Build());
-		Framework.EnqueueLatentCommand(Run->Builder.BuildTearDown());
-		// Wait for the editor to end the PIE session, then release the run (the last reference to the lambdas' state).
-		// Bounded like CQTest's own steps, so a PIE session that never ends fails this test by name instead of the suite timeout.
-		Framework.EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>([Run, Timeout, Start = TOptional<FDateTime>()]() mutable
-		{
-			if (!Start.IsSet()) { Start = FDateTime::UtcNow(); }
-			bool bPieEnded = true;
-			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		EnqueueWithTeardown(Run, Timeout);
+	}
+
+	/** The reconnect key this client's local player holds; empty without one. */
+	FString LocalKey(const FState& Client)
+	{
+		const UGameInstance* GameInstance = Client.World != nullptr ? Client.World->GetGameInstance() : nullptr;
+		const UAethelnLocalPlayer* Local = GameInstance != nullptr ? Cast<UAethelnLocalPlayer>(GameInstance->GetFirstGamePlayer()) : nullptr;
+		return Local != nullptr ? Local->GetReconnectKey() : FString();
+	}
+
+	/**
+	 * #21 P4b key producer (R11): the server issues each player a reconnect key at login and sends it to that player's own
+	 * connection only. Each client's local player holds its own key, which it presents in its next login options; no client
+	 * holds the other's key, and no client's copy of a PlayerState carries one.
+	 */
+	void QueueReconnectKeyReachesOwner(FAutomationTestBase& Test)
+	{
+		ExpectUnsavedMapWarnings(Test);
+		const TSharedRef<FRun> Run = MakeShared<FRun>(Test);
+		FNetworkComponentBuilder<FState> NetworkBuilder;
+		NetworkBuilder.WithClients(2).AsDedicatedServer().WithGameMode(AAethelnCombatGameMode::StaticClass());
+		NetworkBuilder.Build(Run->Network);
+		const FTimespan Timeout = FTimespan::FromSeconds(30.0);
+		FRun* R = &Run.Get();
+
+		Run->Network
+			.UntilServer(TEXT("The server issued both players a key"), [R](FState& Server)
 			{
-				bPieEnded &= !(Context.WorldType == EWorldType::PIE && Context.World() != nullptr);
-			}
-			if (!bPieEnded && FDateTime::UtcNow() - Start.GetValue() < Timeout) { return false; }
-			if (!bPieEnded) { Run->Test.AddError(FString::Printf(TEXT("%s: PIE did not end within %.0f s after the R5 teardown"), *Run->Test.GetTestFullName(), Timeout.GetTotalSeconds())); }
-			return true;
-		}));
+				for (int32 Index : { VictimClient, ObserverClient })
+				{
+					const UAethelnAbilitySystemComponent* AbilitySystem = ServerAbilitySystem(Server, Index);
+					const AAethelnPlayerState* PlayerState = AbilitySystem != nullptr ? Cast<AAethelnPlayerState>(AbilitySystem->GetOwner()) : nullptr;
+					if (PlayerState == nullptr || PlayerState->GetReconnectKey().IsEmpty()) { return false; }
+					R->ServerKeys[Index] = PlayerState->GetReconnectKey();
+				}
+				R->Test.TestNotEqual(TEXT("Each player has its own key"), R->ServerKeys[VictimClient], R->ServerKeys[ObserverClient]);
+				return true;
+			}, Timeout)
+			.UntilClients(TEXT("Each client's local player holds its own key"), [R](FState& Client)
+			{
+				return LocalKey(Client) == R->ServerKeys[Client.ClientIndex];
+			}, Timeout)
+			.ThenClients(TEXT("No client holds another player's key"), [R](FState& Client)
+			{
+				const FString Own = LocalKey(Client);
+				R->Test.TestNotEqual(TEXT("A client never holds the other player's key"), Own, R->ServerKeys[1 - Client.ClientIndex]);
+				R->Test.TestEqual(TEXT("The key a client presents at its next login is its own"), AAethelnCombatGameMode::ResolveReconnectKey(
+					FString(TEXT("?")) + CastChecked<UAethelnLocalPlayer>(Client.World->GetGameInstance()->GetFirstGamePlayer())->GetGameLoginOptions()), Own);
+				const AGameStateBase* GameState = Client.World->GetGameState();
+				for (const APlayerState* PlayerState : GameState != nullptr ? GameState->PlayerArray : TArray<TObjectPtr<APlayerState>>())
+				{
+					if (const AAethelnPlayerState* Copy = Cast<AAethelnPlayerState>(PlayerState))
+					{
+						R->Test.TestTrue(TEXT("No client's copy of a PlayerState carries a key"), Copy->GetReconnectKey().IsEmpty());
+					}
+				}
+			});
+
+		EnqueueWithTeardown(Run, Timeout);
+	}
+
+	/** Player A's pawn as the observer received it before A left; its PlayerState is then the kept one. */
+	const AAethelnPlayerState* ObservedKeptState(const FRun& R)
+	{
+		const APawn* Pawn = R.ClientCorpse[ObserverClient].Get();
+		return Pawn != nullptr ? Pawn->GetPlayerState<AAethelnPlayerState>() : nullptr;
+	}
+
+	/**
+	 * #21 P4b, lead decision 2026-10-14 (R11): while player A is away, the remaining player B keeps seeing A's kept pawn and
+	 * its Health, State.Dead and death cue, because the kept PlayerState still replicates. It is inactive, so it leaves B's
+	 * player list, and it has no owner, so A's owner-only Endurance and Guard reach nobody. The server ends A's connection
+	 * through the engine's own entry for a closed connection, APlayerController::OnNetCleanup.
+	 */
+	void QueueKeptPawnSeenByOthers(FAutomationTestBase& Test)
+	{
+		ExpectUnsavedMapWarnings(Test);
+		const TSharedRef<FRun> Run = MakeShared<FRun>(Test);
+		FNetworkComponentBuilder<FState> NetworkBuilder;
+		NetworkBuilder.WithClients(2).AsDedicatedServer().WithGameMode(AAethelnCombatGameMode::StaticClass());
+		NetworkBuilder.Build(Run->Network);
+		const FTimespan Timeout = FTimespan::FromSeconds(30.0);
+		const FAethelnCombatAttributeInitValues Init = AethelnCombatTests::MakeTestInitValues();
+		FRun* R = &Run.Get();
+
+		Run->Network
+			.UntilServer(TEXT("Both players have a pawn, an ASC and a key"), [](FState& Server)
+			{
+				for (int32 Index : { VictimClient, ObserverClient })
+				{
+					const UAethelnAbilitySystemComponent* AbilitySystem = ServerAbilitySystem(Server, Index);
+					if (AbilitySystem == nullptr || AbilitySystem->GetAvatarActor() == nullptr
+						|| CastChecked<AAethelnPlayerState>(AbilitySystem->GetOwner())->GetReconnectKey().IsEmpty()) { return false; }
+				}
+				return true;
+			}, Timeout)
+			.ThenServer(TEXT("Give both players fixture attributes"), [R, Init](FState& Server)
+			{
+				for (int32 Index : { VictimClient, ObserverClient }) { UAethelnAttributeInitEffect::ApplyTo(*ServerAbilitySystem(Server, Index), Init); }
+				R->VictimPlayerId = CastChecked<APlayerState>(ServerAbilitySystem(Server, VictimClient)->GetOwner())->GetPlayerId();
+			})
+			.UntilClient(TEXT("B received player A, its pawn and its Health"), ObserverClient, [R, Init](FState& Client)
+			{
+				AAethelnPlayerState* PlayerState = ClientVictim(Client, R->VictimPlayerId);
+				if (PlayerState == nullptr || PlayerState->GetPawn() == nullptr
+					|| Attribute(*PlayerState->GetAethelnAbilitySystemComponent(), UAethelnCombatAttributeSet::GetHealthAttribute()) != Init.Health) { return false; }
+				R->ClientCorpse[ObserverClient] = PlayerState->GetPawn();
+				return true;
+			}, Timeout)
+			.ThenServer(TEXT("A's connection ends; the server keeps A's pawn and PlayerState, then damages the kept pawn"), [R](FState& Server)
+			{
+				UNetConnection* Connection = Server.ClientConnections[VictimClient];
+				APlayerController* Controller = Connection != nullptr ? Connection->PlayerController.Get() : nullptr;
+				UAethelnAbilitySystemComponent* Victim = ServerAbilitySystem(Server, VictimClient);
+				if (!R->Test.TestNotNull(TEXT("A's server controller exists"), Controller) || !R->Test.TestNotNull(TEXT("A's ASC exists"), Victim)) { return; }
+				R->ServerKept = Victim;
+				Controller->OnNetCleanup(Connection);
+				const AAethelnPlayerState* Kept = Cast<AAethelnPlayerState>(Victim->GetOwner());
+				if (!R->Test.TestTrue(TEXT("A's PlayerState is kept"), IsValid(Kept)) || !R->Test.TestNotNull(TEXT("A's pawn is kept"), Cast<APawn>(Victim->GetAvatarActor()))) { return; }
+				R->Test.TestTrue(TEXT("The kept PlayerState still replicates"), Kept->GetIsReplicated());
+				R->Test.TestTrue(TEXT("The kept PlayerState is inactive"), Kept->IsInactive());
+				R->Test.TestNull(TEXT("The kept PlayerState has no owner"), Kept->GetOwner());
+				AethelnCombatTests::ApplyInstantModifier(*Victim, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+				AethelnCombatTests::ApplyInstantModifier(*Victim, UAethelnCombatAttributeSet::GetEnduranceAttribute(), EGameplayModOp::AddBase, -5.0f);
+			})
+			.UntilClient(TEXT("B sees the kept pawn's Health drop, and the kept player leaves B's player list"), ObserverClient, [R, Init](FState& Client)
+			{
+				const AAethelnPlayerState* Kept = ObservedKeptState(*R);
+				const AGameStateBase* GameState = Client.World->GetGameState();
+				if (Kept == nullptr || GameState == nullptr || !Kept->IsInactive() || GameState->PlayerArray.ContainsByPredicate([Kept](const APlayerState* Listed) { return Listed == Kept; })
+					|| Attribute(*Kept->GetAethelnAbilitySystemComponent(), UAethelnCombatAttributeSet::GetHealthAttribute()) != Init.Health - 10.0f) { return false; }
+				// Endurance changed in the same server frame and set as Health; it is owner-only and the owner is gone.
+				R->Test.TestEqual(TEXT("B never receives the kept player's Endurance"),
+					Attribute(*Kept->GetAethelnAbilitySystemComponent(), UAethelnCombatAttributeSet::GetEnduranceAttribute()), GetDefault<UAethelnCombatAttributeSet>()->GetEndurance());
+				const int32 Index = ObserverClient;
+				Kept->GetAethelnAbilitySystemComponent()->OnDeathCue.AddLambda([R, Index] { ++R->ClientCues[Index]; });
+				return true;
+			}, Timeout)
+			.ThenServer(TEXT("Kill the kept player"), [R](FState& Server)
+			{
+				UAethelnAbilitySystemComponent* Kept = R->ServerKept.Get();
+				UAethelnCombatTimelineSubsystem* Timeline = Server.World->GetSubsystem<UAethelnCombatTimelineSubsystem>();
+				if (!R->Test.TestNotNull(TEXT("The kept ASC exists"), Kept) || !R->Test.TestNotNull(TEXT("The server world has the combat timeline"), Timeline)) { return; }
+				AethelnCombatTests::ApplyInstantModifier(*Kept, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::Override, 0.0f);
+				Timeline->OnLethalResult.Broadcast(Kept, FGuid::NewGuid(), Server.World->GetTimeSeconds());
+				R->Test.TestTrue(TEXT("The server holds State.Dead on the kept player"), Kept->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+			})
+			.UntilClient(TEXT("B sees the kept player's death: State.Dead, zero Health and the death cue"), ObserverClient, [R](FState& Client)
+			{
+				const AAethelnPlayerState* Kept = ObservedKeptState(*R);
+				return Kept != nullptr && Kept->GetAethelnAbilitySystemComponent()->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead)
+					&& Attribute(*Kept->GetAethelnAbilitySystemComponent(), UAethelnCombatAttributeSet::GetHealthAttribute()) == 0.0f
+					&& R->ClientCues[ObserverClient] >= 1;
+			}, Timeout)
+			.ThenServer(TEXT("One death cue"), [R](FState& /*Server*/)
+			{
+				R->Test.TestEqual(TEXT("On a clean loopback link B receives the kept player's death cue once"), R->ClientCues[ObserverClient], 1);
+			});
+
+		EnqueueWithTeardown(Run, Timeout);
 	}
 }
 
@@ -261,6 +435,26 @@ bool FAethelnTwoClientDeathAndRespawnImpairedTest::RunTest(const FString& Parame
 	Impairment.PktLag = 100;
 	Impairment.PktLoss = 5;
 	AethelnTwoClientDeathTests::QueueTwoClientDeathAndRespawn(*this, &Impairment);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnTwoClientReconnectKeyReachesOwnerTest,
+	"Aetheln.GameCombat.Death.TwoClientReconnectKeyReachesOwner",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnTwoClientReconnectKeyReachesOwnerTest::RunTest(const FString& Parameters)
+{
+	AethelnTwoClientDeathTests::QueueReconnectKeyReachesOwner(*this);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnTwoClientKeptPawnSeenByOthersTest,
+	"Aetheln.GameCombat.Death.TwoClientKeptPawnSeenByOthers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnTwoClientKeptPawnSeenByOthersTest::RunTest(const FString& Parameters)
+{
+	AethelnTwoClientDeathTests::QueueKeptPawnSeenByOthers(*this);
 	return true;
 }
 
