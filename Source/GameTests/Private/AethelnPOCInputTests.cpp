@@ -169,7 +169,7 @@ namespace AethelnPOCInputTests
 
 			if (bLocalPlayer)
 			{
-				LocalPlayer = NewObject<ULocalPlayer>(World.GameInstance);
+				LocalPlayer = NewObject<ULocalPlayer>(GEngine);
 				LocalPlayer->PlayerAdded(nullptr, FPlatformUserId::CreateFromInternalId(0));
 				Player.Controller->SetPlayer(LocalPlayer);
 			}
