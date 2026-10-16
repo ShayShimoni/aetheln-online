@@ -79,3 +79,62 @@ private:
 	bool bHoldsStateTag = false;
 	FDelegateHandle DeadHandle;
 };
+
+class UAethelnStanceEffect;
+
+/**
+ * The shared base of order.oathscar.ability.attack_stance and order.oathscar.ability.defense_stance (docs/gas-foundation.md,
+ * Stance; owner redesign of 2026-10-13, issue #260 comment 6142715904). A seam Press commits, removes every active stance
+ * effect, applies this ability's own duration effect, and ends, all in one server call: instant, with no cooldown and no
+ * commitment tag. So at most one stance exists after any accepted cast, and a recast replaces it and restarts the duration
+ * (a lane default, open). The effect lives on the PlayerState ASC. What a stance changes is TBD (#107); until it is decided the
+ * effects carry their state tag and no modifier.
+ */
+UCLASS(Abstract, Config = Game)
+class GAMECOMBAT_API UAethelnStanceAbility : public UAethelnGameplayAbility
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnStanceAbility();
+
+	/**
+	 * Adds a Press-only seam ability, a finite positive duration, no cooldown (an owner rule, not tuning), and the
+	 * commitment-window blocking tags.
+	 */
+	virtual const TCHAR* FindGrantProblem() const override;
+
+	/** The owner's provisional stance duration (2026-10-13), the only stance value set in the ini; re-tuned at the feel test. */
+	UPROPERTY(Config)
+	float ProvisionalStanceDurationSeconds = 0.0f;
+
+protected:
+	/** Constructor only: structure, never config. The concrete stance sets its own effect. */
+	TSubclassOf<UAethelnStanceEffect> StanceEffect;
+
+	virtual void ActivateAbility(
+		const FGameplayAbilitySpecHandle Handle,
+		const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayAbilityActivationInfo ActivationInfo,
+		const FGameplayEventData* TriggerEventData) override;
+};
+
+/** order.oathscar.ability.attack_stance: applies UAethelnAttackStanceEffect (State.Oathscar.AttackStance). */
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnAttackStanceAbility : public UAethelnStanceAbility
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnAttackStanceAbility();
+};
+
+/** order.oathscar.ability.defense_stance: applies UAethelnDefenseStanceEffect (State.Oathscar.DefenseStance). */
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnDefenseStanceAbility : public UAethelnStanceAbility
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnDefenseStanceAbility();
+};

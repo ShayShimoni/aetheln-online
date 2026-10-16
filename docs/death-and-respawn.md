@@ -169,7 +169,7 @@ Health, Endurance, and Guard (see [Respawn](#respawn-p2)).
 **Stance buffs end at death (#260).** The owner's stance buffs (Attack Stance
 and Defense Stance) are removed on death
 ([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)).
-#260 P4 gives each stance effect a removal tag requirement on `State.Dead`, so
+#260 P4 gave each stance effect a removal tag requirement on `State.Dead`, so
 step 3's death effect removes the active stance at the processing time and
 #21 adds no code for it. Respawn does not bring a stance back: the restoration
 stays the fixed Health, Endurance, and Guard set, which the owner declared the

@@ -15,6 +15,12 @@ namespace AethelnGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Staggered, "State.Staggered", "Server-owned stagger state of a parried player attacker; every project ability is refused while it holds (#260 default)");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stagger_Duration, "SetByCaller.Stagger.Duration", "Stagger duration in seconds for the stagger effect");
 
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_AttackStance, "Ability.Oathscar.AttackStance", "order.oathscar.ability.attack_stance");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_DefenseStance, "Ability.Oathscar.DefenseStance", "order.oathscar.ability.defense_stance");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Oathscar_AttackStance, "State.Oathscar.AttackStance", "Exclusive stance state granted by the Attack Stance effect; removed by death or by the other stance");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Oathscar_DefenseStance, "State.Oathscar.DefenseStance", "Exclusive stance state granted by the Defense Stance effect; removed by death or by the other stance");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stance_Duration, "SetByCaller.Stance.Duration", "Stance duration in seconds for the stance effects");
+
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dead, "State.Dead", "Death flow state. Declared by #19, applied and removed only by #21.");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Damage_Wrought, "Damage.Wrought", "combat.damage.wrought");

@@ -181,3 +181,80 @@ void UAethelnParryAbility::EndAbility(
 	}
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);
 }
+
+UAethelnStanceAbility::UAethelnStanceAbility()
+{
+	// Default, open (docs/gas-foundation.md, Action relations): refused inside a commitment window, and an accepted cast after
+	// it resets the chain like any committed action (the seam's existing OtherAction rule). Nothing is said for dodge, block or
+	// the Parry window, so none is added. State.Staggered and State.Dead come from the base ability.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_InstantStrike);
+	// No cooldown tag: the stances have no cooldown (owner, 2026-10-13).
+}
+
+const TCHAR* UAethelnStanceAbility::FindGrantProblem() const
+{
+	if (const TCHAR* Problem = Super::FindGrantProblem()) { return Problem; }
+	if (IsMovementCarried() || bAcceptsRelease) { return TEXT("is not a Press-only seam ability"); }
+	if (StanceEffect == nullptr) { return TEXT("has no stance effect"); }
+	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dead.GetTag(), AethelnGameplayTags::State_Staggered.GetTag(),
+		AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain.GetTag(), AethelnGameplayTags::State_Oathscar_InstantStrike.GetTag() })
+	{
+		if (!ActivationBlockedTags.HasTagExact(Tag)) { return TEXT("lacks a required blocking tag"); }
+	}
+	if (!FMath::IsFinite(ProvisionalStanceDurationSeconds) || !(ProvisionalStanceDurationSeconds > 0.0f)) { return TEXT("has no finite positive stance duration"); }
+	// The stances have no cooldown by owner rule, not as a tuning choice: a positive one is refused.
+	if (ProvisionalCooldownSeconds > 0.0f) { return TEXT("has a cooldown"); }
+	return nullptr;
+}
+
+void UAethelnStanceAbility::ActivateAbility(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo,
+	const FGameplayEventData* TriggerEventData)
+{
+	UAethelnAbilitySystemComponent* ASC = Cast<UAethelnAbilitySystemComponent>(ActorInfo != nullptr ? ActorInfo->AbilitySystemComponent.Get() : nullptr);
+	const FGuid OperationId = GetActivationOperationId();
+	if (ASC != nullptr && ASC->IsSeamActivating(Handle) && ASC->ActiveSeamScope->ActivationId != OperationId) { return; }
+	const FGameplayAbilityActorInfo OriginalActorInfo = GetActivationActorInfo();
+	if (ASC == nullptr || !ASC->IsOwnerActorAuthoritative() || !ASC->IsSeamActivating(Handle) || ASC->ActiveSeamScope->bMovementCarried
+		|| ASC->ActiveSeamScope->bCanceled || !HasActivationLifecycle() || FindGrantProblem() != nullptr)
+	{
+		EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true);
+		return;
+	}
+	// The commit first, so a refused commit spends nothing and leaves the current stance alone.
+	const bool bCommitted = CommitAbility(Handle, &OriginalActorInfo, ActivationInfo);
+	// A synchronous cost/tag/avatar callback replaced this operation: it owns the instance now.
+	if (GetActivationOperationId() != OperationId) { return; }
+	if (!bCommitted || !IsActive() || ASC->ActiveSeamScope->bCanceled || !HasActivationLifecycle())
+	{
+		EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true);
+		return;
+	}
+	// One call removes the active stance (this one's too, so a recast restarts the duration) and applies this one's effect.
+	FGameplayTagContainer Stances;
+	Stances.AddTag(AethelnGameplayTags::State_Oathscar_AttackStance);
+	Stances.AddTag(AethelnGameplayTags::State_Oathscar_DefenseStance);
+	ASC->RemoveActiveEffectsWithGrantedTags(Stances);
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(Handle, &OriginalActorInfo, ActivationInfo, StanceEffect.Get(), GetAbilityLevel(Handle, &OriginalActorInfo));
+	if (Spec.IsValid())
+	{
+		Spec.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Stance_Duration, ProvisionalStanceDurationSeconds);
+		ApplyGameplayEffectSpecToOwner(Handle, &OriginalActorInfo, ActivationInfo, Spec);
+	}
+	if (GetActivationOperationId() == OperationId) { EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, false); }
+}
+
+UAethelnAttackStanceAbility::UAethelnAttackStanceAbility()
+{
+	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_AttackStance);
+	StanceEffect = UAethelnAttackStanceEffect::StaticClass();
+}
+
+UAethelnDefenseStanceAbility::UAethelnDefenseStanceAbility()
+{
+	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_DefenseStance);
+	StanceEffect = UAethelnDefenseStanceEffect::StaticClass();
+}
