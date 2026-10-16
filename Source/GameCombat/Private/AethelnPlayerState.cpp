@@ -92,6 +92,14 @@ bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Req
 		&& AbilitySystemComponent->ProcessMovementCarriedRequest(Request) == EAethelnActivationResult::Accepted;
 }
 
+void AAethelnPlayerState::RequestAbilityPress(FGameplayTag AbilityId)
+{
+	if (AbilitySystemComponent != nullptr)
+	{
+		AbilitySystemComponent->RequestActivation(AbilityId, EAethelnActivationPhase::Press);
+	}
+}
+
 FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
 {
 	FAethelnHudSnapshot Snapshot;
