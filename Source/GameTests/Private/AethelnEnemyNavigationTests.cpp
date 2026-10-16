@@ -274,6 +274,12 @@ bool FAethelnEnemyPrototypeSpaceTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("The enemy uses the enemy controller class"), Enemy->AIControllerClass == AAethelnEnemyController::StaticClass());
 			TestTrue(TEXT("The enemy is possessed when placed in the world"), Enemy->AutoPossessAI == EAutoPossessAI::PlacedInWorldOrSpawned);
 			const FTransform Placed = Enemy->GetActorTransform();
+			// An Editor-loaded world never initialises its actors, so the pawn's components are registered but not initialised;
+			// the possession refresh of its ability system needs the owner and avatar that InitializeComponent sets. A game
+			// world initialises them as the world starts, so the test does what that start does.
+			Enemy->PreInitializeComponents();
+			Enemy->InitializeComponents();
+			Enemy->PostInitializeComponents();
 			Enemy->SpawnDefaultController();
 			TestTrue(TEXT("The enemy controller possesses the enemy"), Cast<AAethelnEnemyController>(Enemy->GetController()) != nullptr);
 			Enemy->DispatchBeginPlay();
