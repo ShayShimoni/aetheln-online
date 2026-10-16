@@ -419,7 +419,6 @@ namespace AethelnTwoClientOathscarTests
 				}
 				if (T.TestEqual(TEXT("The owner received the record of Instant Strike and no other"), R->Records.Num(), 1))
 				{
-					// Red-first: if the entry still sent the chain's id, this record names the chain and this line fails.
 					T.TestTrue(TEXT("The record names Instant Strike"), R->Records[0].AbilityId == AethelnGameplayTags::Ability_Oathscar_InstantStrike);
 					T.TestEqual(TEXT("It is the only step"), static_cast<int32>(R->Records[0].ChainStep), 1);
 					T.TestTrue(TEXT("The control-rotation aim is a unit vector"), FMath::IsNearlyEqual(R->Records[0].AcceptedAim.Size(), 1.0, 0.01));
@@ -478,8 +477,9 @@ namespace AethelnTwoClientOathscarTests
 	}
 }
 
-// K14. Red-first: SubmitAbilityPress routes the id it is given. If it still sent the chain's id, the first press of every run
-// would start the three-hit chain, and "The record names Instant Strike" would fail.
+// K14. Red-first: SubmitAbilityPress routes the id it is given. With a stub that sends the chain's id whatever it is given, the
+// first press starts the three-hit chain instead of the strike, the drive step "Press the four actives in turn" never completes and
+// times out, and the run fails there (the record check "The record names Instant Strike" is the line that would flip if it got that far).
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnOathscarActivesTwoClientTest,
 	"Aetheln.GameCombat.Net.OathscarActivesTwoClient",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
