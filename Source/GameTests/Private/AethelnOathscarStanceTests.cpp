@@ -34,7 +34,8 @@ namespace AethelnOathscarStanceTests
 	TArray<TSubclassOf<UGameplayAbility>> WithDefense()
 	{
 		TArray<TSubclassOf<UGameplayAbility>> Result = Stances();
-		Result.Append({ UAethelnChainTestAbility::StaticClass(), UAethelnInstantStrikeTestAbility::StaticClass(), UAethelnDodgeTestAbility::StaticClass(), UAethelnBlockTestAbility::StaticClass() });
+		Result.Append({ UAethelnChainTestAbility::StaticClass(), UAethelnInstantStrikeTestAbility::StaticClass(), UAethelnDodgeTestAbility::StaticClass(), UAethelnBlockTestAbility::StaticClass(),
+			UAethelnParryTestAbility::StaticClass() });
 		return Result;
 	}
 
@@ -228,6 +229,31 @@ bool FAethelnStanceExclusiveTest::RunTest(const FString& Parameters)
 		G.AdvanceTo(1.5);
 		TestEqual(TEXT("Accepted after the window"), PressStance(G, AttackId), EResult::Accepted);
 		if (TestEqual(TEXT("It resets the chain once"), G.ChainEnds.Num(), 1)) { TestEqual(TEXT("With OtherAction"), G.ChainEnds[0], EAethelnChainEndReason::OtherAction); }
+		TestEqual(TEXT("The stance holds"), StanceEffects(G.ASC()).Num(), 1);
+	}
+
+	// Default, open (owner decision 6, PR 361 low 1): nothing blocks a stance cast during a raised block or inside a Parry window, and the
+	// cast ends neither. The rule itself is not decided here; these two legs pin what the code does, so a later change to the block or
+	// Parry commit path cannot alter it silently. (A cast during a dodge is the same by construction, and is not pinned separately.)
+	{
+		FDefense G; if (!G.Init(*this, WithDefense())) { return false; }
+		G.AdvanceTo(1.0);
+		TestEqual(TEXT("The block is raised"), G.Raise(), EResult::Accepted);
+		TestTrue(TEXT("It holds State.Blocking and its slot"), G.Has(AethelnGameplayTags::State_Blocking) && G.Slot() != nullptr);
+		G.AdvanceTo(1.25);
+		TestEqual(TEXT("A stance cast during the raised block is accepted"), PressStance(G, AttackId), EResult::Accepted);
+		TestTrue(TEXT("The cast ended no block: State.Blocking and the slot still hold"), G.Has(AethelnGameplayTags::State_Blocking) && G.Slot() != nullptr);
+		TestEqual(TEXT("The stance holds"), StanceEffects(G.ASC()).Num(), 1);
+		TestEqual(TEXT("The cast reset no chain: none existed"), G.ChainEnds.Num(), 0);
+	}
+	{
+		FDefense G; if (!G.Init(*this, WithDefense())) { return false; }
+		G.AdvanceTo(1.0);
+		TestEqual(TEXT("The Parry window opens"), G.Deliver(G.Request(AethelnGameplayTags::Ability_Oathscar_Parry)), EResult::Accepted);
+		TestTrue(TEXT("It holds State.Oathscar.Parrying and its slot"), G.Has(AethelnGameplayTags::State_Oathscar_Parrying) && G.Slot() != nullptr);
+		G.AdvanceTo(1.25);
+		TestEqual(TEXT("A stance cast inside the Parry window is accepted"), PressStance(G, DefenseId), EResult::Accepted);
+		TestTrue(TEXT("The cast ended no window: State.Oathscar.Parrying and the slot still hold"), G.Has(AethelnGameplayTags::State_Oathscar_Parrying) && G.Slot() != nullptr);
 		TestEqual(TEXT("The stance holds"), StanceEffects(G.ASC()).Num(), 1);
 	}
 	return true;
