@@ -711,7 +711,7 @@ Every value below is `TBD` (#107).
   distinct attacker is staggered once; a duplicate, reordered, or replayed
   candidate converges on the recorded result through #60's allowance (lane
   default: the window does not end at the first parry; open).
-- **Relations (defaults, open).** The Parry and the block refuse each other,
+- **Relations (defaults, open; the attack-press rule is decided).** The Parry and the block refuse each other,
   because one slot exists per ASC; the Parry is refused while dodging and
   inside the chain's commitment window; an accepted dodge ends a running
   Parry window, as it ends a block (Q10). `State.Dead`, avatar loss, and

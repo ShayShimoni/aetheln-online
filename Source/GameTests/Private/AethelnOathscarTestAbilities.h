@@ -74,3 +74,49 @@ public:
 	void SetBlockedTagsForTests(const FGameplayTagContainer& Tags) { ActivationBlockedTags = Tags; }
 	void SetMovementCarriedForTests(bool bValue) { bMovementCarried = bValue; }
 };
+
+/**
+ * Valid stances authored only in the Editor test module (#260 P4). The 8 s duration and the Endurance cost of 1 are fixture
+ * values, never tuning: the duration is not the provisional 600 s of the ini so a test proves the configured value is the one
+ * applied, and the cost is a value the production stances do not have (it is TBD), so a repeated spend would show. The stances
+ * have no cooldown.
+ */
+UCLASS(NotBlueprintable, HideDropdown)
+class UAethelnAttackStanceTestAbility : public UAethelnAttackStanceAbility
+{
+	GENERATED_BODY()
+
+public:
+	virtual void PostInitProperties() override
+	{
+		Super::PostInitProperties();
+		ContentVersion = 1;
+		ProvisionalEnduranceCost = 1.0f;
+		ProvisionalCooldownSeconds = 0.0f;
+		ProvisionalStanceDurationSeconds = 8.0f;
+	}
+
+	const FGameplayTagContainer& GetBlockedTagsForTests() const { return ActivationBlockedTags; }
+	void SetBlockedTagsForTests(const FGameplayTagContainer& Tags) { ActivationBlockedTags = Tags; }
+	void SetMovementCarriedForTests(bool bValue) { bMovementCarried = bValue; }
+};
+
+UCLASS(NotBlueprintable, HideDropdown)
+class UAethelnDefenseStanceTestAbility : public UAethelnDefenseStanceAbility
+{
+	GENERATED_BODY()
+
+public:
+	virtual void PostInitProperties() override
+	{
+		Super::PostInitProperties();
+		ContentVersion = 1;
+		ProvisionalEnduranceCost = 1.0f;
+		ProvisionalCooldownSeconds = 0.0f;
+		ProvisionalStanceDurationSeconds = 8.0f;
+	}
+
+	const FGameplayTagContainer& GetBlockedTagsForTests() const { return ActivationBlockedTags; }
+	void SetBlockedTagsForTests(const FGameplayTagContainer& Tags) { ActivationBlockedTags = Tags; }
+	void SetMovementCarriedForTests(bool bValue) { bMovementCarried = bValue; }
+};

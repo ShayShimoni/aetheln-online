@@ -243,3 +243,34 @@ bool UAethelnStaggerEffect::ApplyTo(UAbilitySystemComponent& AbilitySystemCompon
 	Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Stagger_Duration, Seconds);
 	return AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec).IsValid();
 }
+
+void UAethelnStanceEffect::Configure(const FGameplayTag& StanceTag)
+{
+	DurationPolicy = EGameplayEffectDurationType::HasDuration;
+
+	FSetByCallerFloat Duration;
+	Duration.DataTag = AethelnGameplayTags::SetByCaller_Stance_Duration;
+	DurationMagnitude = FGameplayEffectModifierMagnitude(Duration);
+
+	// Native GE components must be default subobjects listed in GEComponents during construction.
+	UTargetTagsGameplayEffectComponent* Granted = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("StanceTags"));
+	FInheritedTagContainer GrantedTags;
+	GrantedTags.AddTag(StanceTag);
+	Granted->SetAndApplyTargetTagChanges(GrantedTags);
+	GEComponents.Add(Granted);
+
+	// Death removes the stance at the death effect's processing time and refuses a new one (CanGameplayEffectApply).
+	UTargetTagRequirementsGameplayEffectComponent* Removal = CreateDefaultSubobject<UTargetTagRequirementsGameplayEffectComponent>(TEXT("StanceRemoval"));
+	Removal->RemovalTagRequirements.RequireTags.AddTag(AethelnGameplayTags::State_Dead);
+	GEComponents.Add(Removal);
+}
+
+UAethelnAttackStanceEffect::UAethelnAttackStanceEffect()
+{
+	Configure(AethelnGameplayTags::State_Oathscar_AttackStance);
+}
+
+UAethelnDefenseStanceEffect::UAethelnDefenseStanceEffect()
+{
+	Configure(AethelnGameplayTags::State_Oathscar_DefenseStance);
+}

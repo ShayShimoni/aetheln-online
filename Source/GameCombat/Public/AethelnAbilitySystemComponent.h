@@ -331,6 +331,7 @@ private:
 	friend class UAethelnDodgeAbility;
 	friend class UAethelnBlockAbility;
 	friend class UAethelnParryAbility;
+	friend class UAethelnStanceAbility;
 	friend class UAethelnCombatTimelineSubsystem;
 	friend class UAethelnDeathSubsystem;
 
