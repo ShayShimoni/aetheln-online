@@ -87,7 +87,7 @@ Blueprint, template map, or template input asset was imported.
 ## Runtime composition
 
 `/Game/Maps/MovementPOC` is a classic, non-World-Partition map with OFPA
-disabled. It has 21 actors:
+disabled. It has 24 actors:
 
 - 17 static, non-ticking greybox geometry actors using two meshes and one
   shared grid material
@@ -95,6 +95,10 @@ disabled. It has 21 actors:
 - one movable directional light
 - one movable real-time skylight
 - one sky-atmosphere actor
+- one `NavMeshBoundsVolume` over the whole floor, one built static `RecastNavMesh`,
+  and one greybox `AAethelnEnemyCharacter` on open floor, added in content
+  version 2 by [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) P4
+  (see [Enemy AI and Navigation](enemy-ai-and-navigation.md#authoring-the-map))
 
 The course is approximately 60 m square. A single continuous safety floor sits
 under the complete traversal loop. The course includes:
@@ -105,8 +109,8 @@ under the complete traversal loop. The course includes:
 - three camera-collision obstacles
 - four perimeter safety walls
 
-There are no navigation bounds, combat actors, effects, audio, or interactive
-actors. The map overrides its game mode only through
+There are no effects, audio, or interactive actors, and the one enemy is a
+server-driven greybox, not a player-facing feature. The map overrides its game mode only through
 `BP_MovementPOCGameMode`; the project-wide game mode remains
 `AAethelnGameModeBase`.
 

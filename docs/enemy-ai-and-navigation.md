@@ -373,6 +373,9 @@ under [Asset Intake and Content Validation](asset-intake-and-content-validation.
   becomes applicable instead of `not_applicable`. It stays `non_promotion`: the
   navigation audience evidence is unavailable and the quantitative policy is
   `TBD`. This PR does not claim the family passes.
+  The run on the P4 head: result `non_promotion`, 51 governed packages, 108
+  findings, 0 errors, and the `navigation` family reported `non_promotion` for
+  `MovementPOC` (`content.navigation.non_promotion`, evidence unavailable).
 
 ### Movement
 
@@ -501,7 +504,7 @@ same fixtures. Every test is written red first. Test names are under
 | E11 | P2 | Leash (`TargetLoss`): a target outside the leash is dropped, and the enemy returns home and is restored. |
 | E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. The fixture world does not run the scheduled ticks of the enemy's movement and path following components, so the test ticks both by hand (residual risk 4). |
 | E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link. Under a fixture impairment (100 ms lag, 5 % loss) it requires the attack (not the telegraph), Health, death, and reset, and only bounds the cue count, which is unreliable. Not the #45 network profiles. |
-| E14 | P4 | The prototype space (`PrototypeSpace`): the saved `MovementPOC` loads in the Editor world and holds one navigation bounds volume that covers the floor inside the walls, the player start, and the enemy; one static `RecastNavMesh` saved with built tiles; and one placed `AAethelnEnemyCharacter` that is the production class with the enemy controller class, possesses on spawn, and, begun by hand because a loaded Editor world does not begin play, has its home, its initial Health, and its granted attack. The enemy and the player start stand on the mesh, and a complete (not partial) path query joins them. The test never saves the map. |
+| E14 | P4 | The prototype space (`PrototypeSpace`): the saved `MovementPOC` loads in the Editor world and holds one navigation bounds volume that covers the floor inside the walls, the player start, and the enemy; one static `RecastNavMesh` saved with built tiles; and one placed `AAethelnEnemyCharacter` that is the production class with the enemy controller class, possesses on spawn, and, begun by hand because a loaded Editor world does not begin play, has its home, its initial Health, and its granted attack. The enemy and the player start stand on the mesh, and a complete (not partial) path query joins them. The test never saves the map. An Editor-loaded world does not initialise its actors, so the test also runs the component initialisation a game world performs before it spawns the controller, and it ignores the one `UCrowdManager` warning the engine logs when a world holding a built `RecastNavMesh` is replaced (engine teardown); any other warning still fails it. |
 | C1 | P3 | Config (`ProvisionalConfig`): every promoted value is in `Config/DefaultGame.ini` and reaches the class defaults. |
 
 ## Measurements
@@ -529,6 +532,21 @@ decisions. They say nothing about a real map, several enemies, a client load, or
 packaged server; #45 owns those. The raw logs are in the issue's delivery
 evidence (`issue-83-p3`).
 
+### MovementPOC mesh (P4)
+
+Recorded by P4 on the same machine, from the authoring commandlet's
+`AETHELN_MEASURE` line (headless Editor, no rendering). The map is the 6000 unit
+square course (`NavMeshBoundsVolume` of 6000 by 6000 by 600 units), the engine's
+default agent (radius 35), static runtime generation. These are measurements, not
+budgets.
+
+| What | Value |
+| --- | --- |
+| Navigation build, wall time | 43.0 ms |
+| Tiles in the mesh, and tiles holding data | 147, and 40 |
+
+The raw logs are in the issue's delivery evidence (`issue-83-p4`).
+
 ## Acceptance-Criteria Mapping
 
 | #83 criterion | Covered by |
@@ -540,7 +558,7 @@ evidence (`issue-83-p3`).
 | Minimum replication; clients cannot drive AI or contact | [Replication](#replication), [Server-Only Execution](#server-only-execution); E1, E8 |
 | Tests for target loss, unreachable paths, invalid commands, interruption ordering, death and reset, two-player contention, server-only execution | E1-E11 |
 | DoD: one greybox enemy navigates and attacks in the prototype space | On the provisional values: E12 (headless arena) and E13 in P3, and in P4 the enemy, the bounds volume, and the built mesh in `MovementPOC.umap` itself (E14). The box stays open until P4 merges. In a real session the enemy stays Idle until the player initial attributes exist (open decision 10). |
-| DoD: focused automation and repeatable multiplayer evidence | E1-E13 |
+| DoD: focused automation and repeatable multiplayer evidence | E1-E14 |
 | DoD: budgets stay with #45 | Measurements only, P3 |
 
 ## Phased Delivery
