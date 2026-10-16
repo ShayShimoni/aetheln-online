@@ -349,6 +349,9 @@ void UAethelnCombatTimelineSubsystem::Sweep(const FStep& Entry, const FAethelnAt
 			if (Target == nullptr || Target == Attacker || !(ContactTime < Interval.ToSeconds)) { continue; }
 			const uint32 TargetCombatId = GetOrAssignCombatId(*Target);
 			if (TargetCombatId == 0) { continue; }
+#if WITH_DEV_AUTOMATION_TESTS
+			++CandidateCountForTests;
+#endif
 			FCandidate& Candidate = OutCandidates.AddDefaulted_GetRef();
 			Candidate.ContactTime = ContactTime;
 			Candidate.Ordinal = Entry.Ordinal;

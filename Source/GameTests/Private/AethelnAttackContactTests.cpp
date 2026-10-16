@@ -223,6 +223,47 @@ bool FAethelnDeterministicOrderingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnTargetIdOrderingTest,
+	"Aetheln.GameCombat.AttackTimeline.TargetIdOrdering",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnTargetIdOrderingTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnContactTests;
+	// First is spawned first but is first swept only by the second activation; Second is swept by both. Under discovery-time
+	// ids Second would hold the lower id and win every tie. Both overlap the shape at ActiveStart of the second activation
+	// (an initial overlap, so the contact time is exactly that start for both) and tie on time and ordinal.
+	for (int32 MaxTargets : { 1, 2 })
+	{
+		FFixture F; if (!F.Init(*this)) { return false; }
+		SetStepValues(*F.Ability, [MaxTargets](FAethelnAttackStepDefinition& Step) { Step.MaxTargets = MaxTargets; });
+		AAethelnCombatAICharacter* First = F.SpawnTarget(*this, FVector(300.0, 0.0, 0.0));
+		AAethelnCombatAICharacter* Second = F.SpawnTarget(*this, FVector(-40.0, 0.0, 0.0));
+		if (First == nullptr || Second == nullptr) { return false; }
+		UAethelnAbilitySystemComponent* FirstAsc = First->GetAethelnAbilitySystemComponent();
+		UAethelnAbilitySystemComponent* SecondAsc = Second->GetAethelnAbilitySystemComponent();
+		F.Press(); F.AdvanceTo(0.5);
+		TestEqual(TEXT("Only the second target is in reach of the first activation"), F.Results.Num(), 1);
+		First->SetActorLocation(FVector(40.0, 0.0, 0.0));
+		TestEqual(TEXT("Link press starts the next step"), F.Press(), EResult::Accepted);
+		F.AdvanceTo(0.75);
+		TestTrue(TEXT("Combat ids follow registration order, not first sweep discovery"),
+			F.Timeline->GetOrAssignCombatId(*FirstAsc) < F.Timeline->GetOrAssignCombatId(*SecondAsc));
+		if (TestEqual(*FString::Printf(TEXT("MaxTargets %d: results of both activations"), MaxTargets), F.Results.Num(), 1 + MaxTargets))
+		{
+			TestEqual(TEXT("The first resolved result is the lower combat id"), F.Results[1].TargetCombatId, F.Timeline->GetOrAssignCombatId(*FirstAsc));
+			if (MaxTargets == 2)
+			{
+				TestEqual(TEXT("The two contacts tie exactly"), F.Results[1].ContactTime, F.Results[2].ContactTime);
+				TestEqual(TEXT("The higher combat id resolves second"), F.Results[2].TargetCombatId, F.Timeline->GetOrAssignCombatId(*SecondAsc));
+			}
+		}
+		TestEqual(TEXT("The lower id takes the contested slot"), Health(*First), 35.0f);
+		TestEqual(TEXT("The higher id is hit only when the record has room"), Health(*Second), MaxTargets == 1 ? 35.0f : 30.0f);
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnDamageAndLethalLatchTest,
 	"Aetheln.GameCombat.AttackTimeline.DamageAndLethalLatch",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -400,6 +441,8 @@ bool FAethelnAvoidanceDefenseAndRelationTest::RunTest(const FString& Parameters)
 		if (!F.SpawnAttacker(*this, Ally, FVector(60.0, 0.0, 0.0), 0.0)) { return false; }
 		const float AllyHealth = Ally.Player.AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute());
 		F.Press(); F.AdvanceTo(0.5);
+		// The row only means something if the sweep found the ally: otherwise "nothing" is a miss, not the relation.
+		TestTrue(TEXT("The sweep found the ally, so the relation is what rejects it"), F.Timeline->GetCandidateCountForTests() > 0);
 		TestEqual(TEXT("A player target yields nothing (OQ1)"), F.Results.Num(), 0);
 		TestEqual(TEXT("The ally takes no damage"), Ally.Player.AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), AllyHealth);
 		TestFalse(TEXT("Players are allies"), UAethelnCombatTimelineSubsystem::IsHostile(*F.Player.AbilitySystem, *Ally.Player.AbilitySystem));
