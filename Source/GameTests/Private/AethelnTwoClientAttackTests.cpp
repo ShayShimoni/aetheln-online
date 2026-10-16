@@ -716,6 +716,10 @@ namespace AethelnTwoClientAttackTests
 		// Each closed connection makes that PIE client log the engine's own connection-lost failure.
 		Test.AddExpectedMessage(TEXT("UEngine::BroadcastNetworkFailure: FailureType = ConnectionLost"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 0);
 		Test.AddExpectedMessage(TEXT("Network Failure: GameNetDriver\\[ConnectionLost\\]"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+		// The three disconnected clients fall back to GameDefaultMap, which is MovementPOC and now holds a built navigation
+		// mesh; tearing each of those fallback worlds down makes the crowd manager log an engine warning for the mesh that is
+		// already gone (#83 P4). Count 0 requires it at least once, as E12 does.
+		Test.AddExpectedMessage(TEXT("Unable to find RecastNavMesh instance while trying to create UCrowdManager instance"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
 		BuildNetwork(*Run, 4, nullptr);
 		QueueSetup(*Run, 4, 4, false);
 		FRun* R = &Run.Get();
