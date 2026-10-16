@@ -780,6 +780,24 @@ value is set here except the owner's provisional 600 s stance duration.
   `SetByCaller.Stance.Duration`, and ends uncancelled. The effects carry the state
   tag and no modifier; `UAethelnStanceEffect` is their abstract base.
 
+### Bindings (as built, #260 P5)
+
+- **The route.** `UAethelnPOCInputComponent` creates one Boolean Enhanced Input action for each active (`IA_POC_InstantStrike`,
+  `IA_POC_Parry`, `IA_POC_AttackStance`, `IA_POC_DefenseStance`) and binds `Started` to a handler that calls
+  `RouteActivePress(Mode, Controller, AbilityId)`. That sends the press through `SubmitAbilityPress`, the generalization of
+  `SubmitPrimaryAttack`, to the local controller's PlayerState as an `IAethelnCombatInputSink`, and from there to the ASC's
+  `RequestActivation`. The press is Reticle mode only: in Cursor mode nothing is sent. These keys have no recapture role, so they
+  do not go through `FAethelnPrimaryButtonRouter`. The client sends the ability id, aim and time sample only, as for the chain.
+- **Keys: #82.** The layout is #82's and no key is chosen in code or in a tracked ini. Each action's key is a `FKey` config property of
+  the component (`InstantStrikeKey`, `ParryKey`, `AttackStanceKey`, `DefenseStanceKey`, section
+  `[/Script/GameUI.AethelnPOCInputComponent]`); an invalid key, the default, maps nothing, so the press has no way in until a run
+  or #82 supplies one. The keys stay open for #82.
+- **Ungranted is inert.** `GrantedAbilities` is unchanged (owner, issue #260 comment
+  [6142715904](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)), so in production the server
+  answers a press of an active with `ActivationBlocked`: nothing is spent, started or applied. It is an ordinary rejected request,
+  with the owner's `Log`-level `LogAethelnActivationOutcome` line and the seam's usual outcome record. As for the chain, each press
+  still takes a token from the per-connection rate bucket.
+
 ### Action relations
 
 | Relation | Rule | Status |
@@ -792,7 +810,7 @@ value is set here except the owner's provisional 600 s stance duration.
 | Parry and block | Refused both ways: one defense slot per ASC (`State.Blocking` blocks the Parry, `State.Oathscar.Parrying` blocks the block) | Default, open (the owner may prefer a parry that ends the block). Implemented in P3 |
 | An attack press (the chain or Instant Strike) during the Parry window | Refused until the window ends, as the block refuses it (Q10): `State.Oathscar.Parrying` is a blocking and a reset tag of the chain, which Instant Strike inherits. The refusal spends nothing and ends nothing | Decided (owner, 2026-10-14, [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6156696832)); implemented in P3 |
 | A dodge accepted during a Parry window | Ends the window at the dodge's acceptance, as it ends a block (Q10) | Default, open. Implemented in P3 (`CancelParry`) |
-| A stance cast inside a commitment window, and whether it resets the chain | Refused inside; resets after, as any committed action | Default, open (the owner may exempt the stance). Implemented in P4: `State.Oathscar.SwordShieldBasicChain` and `State.Oathscar.InstantStrike` are blocking tags of both stances; the reset after is the seam's existing `OtherAction` rule. Nothing is set for a stance cast while dodging, blocking, or inside a Parry window, so no blocking tag is added for them (open) |
+| A stance cast inside a commitment window, and whether it resets the chain | Refused inside; resets after, as any committed action | Default, open (the owner may exempt the stance). Implemented in P4: `State.Oathscar.SwordShieldBasicChain` and `State.Oathscar.InstantStrike` are blocking tags of both stances; the reset after is the seam's existing `OtherAction` rule. Nothing is set for a stance cast while dodging, blocking, or inside a Parry window, so no blocking tag is added for them (open). As built, a stance cast during a dodge, a raised block or an open Parry window is therefore accepted and ends none of them (`State.Blocking` and `State.Oathscar.Parrying` and their slots still hold); K10 pins the block and Parry legs, and the dodge leg is the same by construction and not pinned separately. Whether a stance should be refused or should end them is the owner's open item 6, not decided here |
 | What a staggered player may do | Every project ability is refused while `State.Staggered` holds; movement is unrestricted (#60 OQ4) | Default, open. Implemented in P3: `State.Staggered` is a blocking tag of the base ability and a reset tag of the chain |
 
 ### Phased plan
@@ -805,7 +823,7 @@ Each PR targets `develop`, uses `Refs #260`, and stays small.
 | **P2** Instant Strike | Single-step chain support (step count and commitment tag read from the chain state), `UAethelnInstantStrikeAbility`, its tags and config, its grant validation, its relations; removal of the three superseded skeletons and their tags; K1 to K4, K13 (Instant Strike rows), and the T17, T19, T20 moves. | P1; #60 P5 |
 | **P3** Parry | `UAethelnParryAbility`, `State.Oathscar.Parrying`, the `Parried` consequence, the window boundaries, the forced attacker interruption, `State.Staggered` and its effect, the relations; K5 to K9. | P2; #18 P4 |
 | **P4** Stance | The stance abilities and effects, exclusion, death removal; K10 to K12. | P2 |
-| **P5** Bindings and two-client evidence | Input bindings through #60's input sink (#82 owns the layout), K14 as manual PIE steps under the #82 conditions C1 and C2. | P4; #60 P6; #19 P5 |
+| **P5** Bindings and two-client evidence (built) | The four Enhanced Input actions and `RouteActivePress` / `SubmitAbilityPress` through #60's input sink, with no key chosen (keys: #82, open; [Bindings](#bindings-as-built-260-p5)); K14 as a two-client CQTest PIE run, clean and under a fixture 100 ms lag and 5 % loss, and as manual PIE steps under the #82 conditions C1 and every C2 kind ([Manual K14 steps](#manual-k14-steps-82)); the PR 361 lows (the stance relation row, K10 and K13). `GrantedAbilities` is untouched. | P4; #60 P6; #19 P5 |
 
 ### Test plan
 
@@ -829,7 +847,34 @@ its PIE rows (A19 to A21) under the same conditions.
 | K11 | `Aetheln.GameCombat.OathscarActives.StanceRemovedOnDeath` | P4 | H | Death, through the real death transition, removes the active stance at once; no cast while dead and the stance effect cannot be applied to a dead player; after respawn Health, Endurance, and Guard are restored and no stance exists, and a new cast is accepted; avatar loss and re-possession keep the same stance effect |
 | K12 | `Aetheln.GameCombat.OathscarActives.StanceNetworkConditions` | P4 | H | A25 profiles: duplicated (also after a later cast replaced the stance), reordered, and dropped casts leave at most one stance effect and spend nothing twice; a delayed cast is judged at its arrival (the duration starts then) and one arriving after death is refused and spends nothing |
 | K13 | `Aetheln.GameCombat.OathscarActives.DefinitionsAndTags` | P2 to P4 | H | Unique `Ability.` tags whose comments are the stable IDs, version 1, the policies above (the stances with no cooldown tag), the stance grant rules (a finite positive duration, no cooldown, Press-only, the blocking tags), no superseded skeleton or tag remains |
-| K14 | `Aetheln.GameCombat.Net.OathscarActivesTwoClient` | P5 | P | A19 to A21 conditions: owner-only outcomes and records; observers see phase state, cues, and the stance tag only; no double commit under C1 and each C2 kind |
+| K14 | `Aetheln.GameCombat.Net.OathscarActivesTwoClient`, `Aetheln.GameCombat.Net.OathscarActivesTwoClientImpaired`, and the routing companion `Aetheln.POC.Input.ActiveBindingsRoute` (H) | P5 | P | A19 to A21 conditions, with the fixture actives granted (the production ones stay ungranted). Companion (H): a Reticle-mode press of each active is accepted by its own ability through `RouteActivePress`, a Cursor-mode press and a press with no controller send nothing, and with no active granted each press is `ActivationBlocked` with nothing spent, started or applied; the tracked ini maps no key. PIE, on a clean link and under a fixture 100 ms lag and 5 % loss: the attacker presses Instant Strike, Parry, Attack Stance and Defense Stance in turn through the GameUI entry, each accepted. The owner receives four ordered outcomes, one record (Instant Strike, step 1, a `Completed` chain end) and its own stance effect, never two and never both tags; the server commits one hit and four Endurance spends and holds one stance effect; the observer sees the strike's phase state, the Parry tag while the window is open, and the stance tags, never a stance effect, an outcome, a record or a chain end, and the owner's own copy of the phase state never changes (`COND_SkipOwner`); a clean link shows one result cue per hit on each client. Red-first: if the route sent the chain's id, the record would name the chain and "The record names Instant Strike" fails. Each C2 kind (`PktLagVariance`, `PktOrder`, `PktDup`, and the others) is not simulated here: the reliable channel absorbs duplication and reordering before the seam sees a request, and the seam's own rows for them are K4, K9 and K12. They are the manual steps below |
+
+### Manual K14 steps (#82)
+
+The automated rows prove the routing and the owner and observer split; these steps measure the bound keys and each C2 kind with a
+person at the keyboard, which the harness cannot. They cannot run on the production configuration: the actives are not in
+`GrantedAbilities`, the values of Instant Strike and Parry are `TBD`, and the eight aim and time bounds are `TBD` and unset (the seam
+fails closed). A run supplies candidate values locally and untracked (for example in `Saved/Config/WindowsEditor/Game.ini`: the
+eight `Provisional...` keys of `/Script/GameCombat.AethelnAbilitySystemComponent`, `+GrantedAbilities` of the four active classes under
+`/Script/GameCombat.AethelnPlayerState`, the class sections of Instant Strike and Parry, and the four key slots of
+`[/Script/GameUI.AethelnPOCInputComponent]`) and records them verbatim as candidate values for that run, never as tuning. Keys: #82; the
+key slots are the run's own choice and decide nothing.
+
+1. PIE net mode "Play As Client", two players and a separate server, launched with
+   `?game=/Script/GameCombat.AethelnCombatGameMode`, under C1 (clean). On client 1, in Reticle mode, press each bound key: Instant
+   Strike (the dummy loses its authored damage once), Parry (the window opens and closes), Attack Stance, then Defense Stance (it
+   replaces the first). Client 2 watches client 1: it must see the strike's phase state, the Parry and stance tags, and cues, and no
+   outcome, record or Endurance change. Client 1's log prints one `LogAethelnActivationOutcome` line per press.
+2. In Cursor mode (Left Alt), press each key: nothing is sent and the log prints nothing. Recapture with Left Alt and a click; the click
+   is not an attack, and a fresh key press is needed.
+3. Repeat step 1 under each C2 kind of the #44 catalog (`Net PktLag`, `PktLagVariance`, `PktLoss`, `PktOrder`, `PktDup`, applied to the
+   side recorded with the result). For every press record the outcome and its reason, Endurance before and after (one spend per
+   accepted press, never two), the stance effects held (at most one), the hits taken by the dummy (one per strike), and client 2's view.
+   No duplicate, reordered or delayed request may commit twice.
+4. With no key bound, `Aetheln.Combat.Request <AbilityId> Press` with each active's `Ability.` tag starts the same press through the
+   seam, bypassing the key and the Reticle gate; it is the way to run steps 1 and 3 before #82 decides the layout.
+5. With the actives left out of `+GrantedAbilities` (the production state), every press, bound or by console, is answered
+   `ActivationBlocked`: nothing is spent, started or applied.
 
 ### Open decisions for the representative actives
 

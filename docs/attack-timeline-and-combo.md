@@ -144,7 +144,7 @@ Existing code at `ab296d0`:
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnCombatInputSink`; calls `ResetChain(AvatarLost)` in its null-pawn case. |
 | `UAethelnCombatTimelineSubsystem` | GameCombat | `UWorldSubsystem`, active on the server. Registered steps, boundary owners (chain steps and, through `RegisterNonChainBoundaries`, non-chain owners such as #18's dodge window; an owner leaves the list once `HasPendingBoundaries()` is false: no chain and no open dodge window), activation ordinals, combat entity ids, per-frame sampling, the contact queue, resolution, already-hit records, the lethal notification, the avoidance set, registered defense slots (one per target, each with a server-time interval, #18 P4), and the relation function. |
 | `UAethelnDamageEffect` | GameCombat | Instant effect: Health modifier from `SetByCaller.Damage.Wrought`, which carries the negated authored damage (a set-by-caller magnitude has no coefficient, as with the cost effect). The pipeline adds `Damage.Wrought` to every spec as a dynamic asset tag. |
-| `UAethelnPOCInputComponent` (extend) | GameUI | P6: primary-attack action on left mouse, Reticle mode only, never the recapture press. |
+| `UAethelnPOCInputComponent` (extend) | GameUI | P6: primary-attack action on left mouse, Reticle mode only, never the recapture press. `SubmitAbilityPress` is the general entry that `SubmitPrimaryAttack` calls; #260 P5 adds four more actions through it (`RouteActivePress`, no key chosen; [Representative Oathscar Actives](gas-foundation.md#bindings-as-built-260-p5)). |
 
 ## Request Contract
 
