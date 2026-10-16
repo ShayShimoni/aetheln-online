@@ -971,14 +971,15 @@ change bumps the chain's `ContentVersion`.
 
 The one exception is the basic chain's provisional values. By owner decision D3
 ([issue #84 comment 6131999366](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366),
-2026-10-12), the former GameTests fixture values live in
-`[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`,
+2026-10-12), the former GameTests fixture values live in the chain's
+definition asset `/Game/Combat/Attacks/DA_SwordShieldBasicChain` (#84 P4; before P4 they were
+in `[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`),
 marked provisional. They are not tuning, no number was invented, and the #84 P5
 feel test re-tunes them. The chain is grantable but not granted in production.
 
 | Config section | Keys |
 | --- | --- |
-| `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
+| `[/Script/GameCombat.AethelnBasicChainAbility]` | `Definition` only, the path of the definition asset that holds `ContentVersion`, the three steps (the values in [Step definition](#step-definition)), the Endurance cost, and the sampling bounds. The fields `ContentVersion`, `ProvisionalEnduranceCost`, `ProvisionalSteps`, `ProvisionalMaxSampleAngleDegrees`, and `ProvisionalMaxSampleDistance` still read config for an ability with no `Definition` |
 | `[/Script/GameCombat.AethelnCombatTimelineSubsystem]` | `AvoidanceTags` (empty; `State.DodgeInvulnerable` is never added, see [Resolution order](#resolution-order-prototype-subset) step 3) |
 | `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |

@@ -460,9 +460,9 @@ bool FAethelnAttackStepDefinitionTest::RunTest(const FString& Parameters)
 	AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("A chain with no version and no steps has no usable grant"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
 
-	// #84 D3: the production chain now carries the provisional values from Config/DefaultGame.ini. A step that
+	// #84 D3, P4: the production chain carries the provisional values of its definition asset. A step that
 	// mis-parses (a nested FTransform most of all) can still pass structural grant validation, so spot-check them.
-	TestTrue(TEXT("The production chain with its provisional ini values is grantable"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnBasicChainAbility::StaticClass())));
+	TestTrue(TEXT("The production chain with its definition asset values is grantable"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnBasicChainAbility::StaticClass())));
 	const UAethelnBasicChainAbility* Production = GetDefault<UAethelnBasicChainAbility>();
 	TestEqual(TEXT("Provisional ContentVersion"), Production->ContentVersion, 1u);
 	TestEqual(TEXT("Provisional cost"), Production->ProvisionalEnduranceCost, 2.0f);

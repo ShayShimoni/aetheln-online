@@ -30,6 +30,8 @@ public class GameTests : ModuleRules
 			"Niagara",
 			"NiagaraAnimNotifies",
 			"PhysicsCore",
+			// #84 P4: the audience cook rule test calls the cook hook for a client-only and a dedicated-server target.
+			"TargetPlatform",
 			"UnrealEd"
 		});
 
