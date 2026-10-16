@@ -3,6 +3,7 @@
 #include "AethelnAssetManager.h"
 #include "AethelnAttackDefinitionTestAbilities.h"
 #include "AethelnBasicChainAbility.h"
+#include "AethelnGameplayTags.h"
 #include "AethelnPlayerState.h"
 #include "Engine/AssetManager.h"
 #include "Interfaces/ITargetPlatform.h"
@@ -36,6 +37,17 @@ bool FAethelnMissingDefinitionRefusesGrantTest::RunTest(const FString& Parameter
 	const TCHAR* OtherProblem = Other->FindGrantProblem();
 	TestTrue(TEXT("A definition of another ability is refused with its identifier"),
 		OtherProblem != nullptr && FString(OtherProblem).Contains(AethelnAttackDefinitionId::AbilityMismatch));
+
+	// A definition that fails its own validator (here a zero ContentVersion, in memory) is refused as invalid.
+	UAethelnAttackDefinition* Invalid = NewObject<UAethelnAttackDefinition>(GetTransientPackage(), TEXT("DA_InvalidDefinitionFixture"));
+	Invalid->StableContentId = FName(TEXT("test.invalid.definition"));
+	Invalid->ContentVersion = 0;
+	Invalid->AbilityId = AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain;
+	UAethelnBasicChainAbility* UsesInvalid = NewObject<UAethelnBasicChainAbility>();
+	UsesInvalid->Definition = TSoftObjectPtr<UAethelnAttackDefinition>(Invalid);
+	const TCHAR* InvalidProblem = UsesInvalid->FindGrantProblem();
+	TestTrue(TEXT("An invalid definition is refused with its identifier"),
+		InvalidProblem != nullptr && FString(InvalidProblem).Contains(AethelnAttackDefinitionId::Invalid));
 
 	// The production chain, whose asset exists, has no definition problem.
 	TestNull(TEXT("The production chain's definition asset is usable"), GetDefault<UAethelnBasicChainAbility>()->FindGrantProblem());

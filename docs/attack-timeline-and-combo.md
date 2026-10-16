@@ -274,7 +274,7 @@ and `Aetheln.GameCombat.NetworkSpike.AimRateBound`.
 
 Each of the three steps has these authored values. Offsets are seconds from the
 step's authoritative start; every value is `TBD`, except the provisional chain
-values owner decision D3 promoted to `Config/DefaultGame.ini` (see
+values owner decision D3 promoted (to `Config/DefaultGame.ini` in P3, into the chain's definition asset in P4; see
 [Data-Driven Tuning](#data-driven-tuning)).
 
 | Value | Meaning |
@@ -319,7 +319,7 @@ three steps, every value is finite, and:
 P5 adds `InterruptibleUntil` and `bInterruptsTarget` to the step struct, with
 the rule `0 <= InterruptibleUntil <= RecoveryEnd`, and extends A5. The
 production chain's first configured `ContentVersion` is 1, set with the D3
-provisional values in `Config/DefaultGame.ini` (#84 P3), so P5 bumps nothing
+provisional values in its definition asset (#84 P3 and P4), so P5 bumps nothing
 and version 1 includes these fields (see
 [Interruption](#interruption)).
 
@@ -726,9 +726,9 @@ P5 delivers it as follows:
 - **Record.** The record's windows carry `InterruptibleUntil`.
 - **Content version.** The production chain's first configured
   `ContentVersion` is 1, set with the D3 provisional values in
-  `Config/DefaultGame.ini` (#84 P3; unset values still fail the grant), so P5
+  its definition asset (#84 P3 and P4; an unusable asset fails the grant), so P5
   has nothing to bump and version 1 includes the P5 fields. The test fixture
-  no longer sets values; it reads the same ini section.
+  no longer sets values; it reads the same asset through the class defaults.
 - **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
   registered steps, so their later contacts drop. The subsystem then raises
   `OnTargetInterrupted(TargetAsc, ContactTime)`, and the #83 enemy controller

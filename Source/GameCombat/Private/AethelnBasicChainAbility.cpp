@@ -27,6 +27,11 @@ UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 const TCHAR* UAethelnBasicChainAbility::FindDefinitionProblem() const
 {
 	if (Definition.IsNull()) { return nullptr; }
+	// The texts carry the validation identifiers, so they are built once from the constants tests and docs name.
+	static const FString MissingText = FString::Printf(TEXT("references an attack definition asset that does not exist (%s)"), AethelnAttackDefinitionId::Missing);
+	static const FString NoLoadText = FString::Printf(TEXT("references an attack definition asset that does not load (%s)"), AethelnAttackDefinitionId::Missing);
+	static const FString InvalidText = FString::Printf(TEXT("references an invalid attack definition asset (%s)"), AethelnAttackDefinitionId::Invalid);
+	static const FString MismatchText = FString::Printf(TEXT("references an attack definition asset of another ability (%s)"), AethelnAttackDefinitionId::AbilityMismatch);
 	// An already loaded asset is found without file access, so the per-activation checks stay cheap.
 	const UAethelnAttackDefinition* Loaded = Definition.Get();
 	if (Loaded == nullptr)
@@ -34,13 +39,13 @@ const TCHAR* UAethelnBasicChainAbility::FindDefinitionProblem() const
 		// Checked before the load, so a missing asset is a refusal with an identifier and not a load error.
 		if (!FPackageName::DoesPackageExist(Definition.GetLongPackageName()))
 		{
-			return TEXT("references an attack definition asset that does not exist (attack_definition_missing)");
+			return *MissingText;
 		}
 		Loaded = Definition.LoadSynchronous();
 	}
-	if (Loaded == nullptr) { return TEXT("references an attack definition asset that does not load (attack_definition_missing)"); }
-	if (Loaded->FindProblem() != nullptr) { return TEXT("references an invalid attack definition asset (attack_definition_invalid)"); }
-	if (Loaded->AbilityId != GetAbilityId()) { return TEXT("references an attack definition asset of another ability (attack_definition_ability_mismatch)"); }
+	if (Loaded == nullptr) { return *NoLoadText; }
+	if (Loaded->FindProblem() != nullptr) { return *InvalidText; }
+	if (Loaded->AbilityId != GetAbilityId()) { return *MismatchText; }
 	return nullptr;
 }
 
