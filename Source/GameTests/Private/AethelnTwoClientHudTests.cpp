@@ -255,10 +255,14 @@ namespace AethelnTwoClientHudTests
 				const APawn* Avatar = Cast<APawn>(Victim->GetAvatarActor());
 				return Avatar != nullptr && Avatar != R->ServerCorpse.Get() && !Victim->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
 			}, Timeout)
-			.UntilClients(TEXT("Both HUDs converge back to A's restored Health and A's new avatar"), [R, FullHealth](FState& Client)
+			.UntilClients(TEXT("Both clients see A's new living avatar"), [R](FState& Client)
+			{
+				return HasNewLivingAvatar(PlayerAOnClient(*R, Client), R->ClientCorpse[Client.ClientIndex]);
+			}, Timeout)
+			.UntilClients(TEXT("Both HUDs converge back to A's restored Health"), [R, FullHealth](FState& Client)
 			{
 				const FAethelnHudView& OfA = Client.ClientIndex == ClientA ? OwnView(*R, Client) : OpponentView(*R, Client);
-				return HasNewLivingAvatar(PlayerAOnClient(*R, Client), R->ClientCorpse[Client.ClientIndex]) && OfA.Health.ToString() == FullHealth;
+				return OfA.Health.ToString() == FullHealth;
 			}, Timeout)
 			.ThenClient(TEXT("A requests another ungranted ability after the respawn"), ClientA, [R](FState& Client)
 			{
