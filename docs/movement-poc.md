@@ -87,7 +87,8 @@ Blueprint, template map, or template input asset was imported.
 ## Runtime composition
 
 `/Game/Maps/MovementPOC` is a classic, non-World-Partition map with OFPA
-disabled. It has 24 actors:
+disabled. It has 24 actors (the earlier 21 plus the three added by P4; no test counts
+them):
 
 - 17 static, non-ticking greybox geometry actors using two meshes and one
   shared grid material
@@ -109,8 +110,8 @@ under the complete traversal loop. The course includes:
 - three camera-collision obstacles
 - four perimeter safety walls
 
-There are no effects, audio, or interactive actors, and the one enemy is a
-server-driven greybox, not a player-facing feature. The map overrides its game mode only through
+There are no effects or audio. The one placed enemy is a temporary prototype
+greybox, not production content. The map overrides its game mode only through
 `BP_MovementPOCGameMode`; the project-wide game mode remains
 `AAethelnGameModeBase`.
 

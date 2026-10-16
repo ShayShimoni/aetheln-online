@@ -246,7 +246,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnTwoClientDeathAndRespawnTest,
 bool FAethelnTwoClientDeathAndRespawnTest::RunTest(const FString& Parameters)
 {
 	// This test creates its own map over the Editor's startup world, the default map, which now holds a built navigation mesh;
-	// replacing it makes the crowd manager log one engine warning for the mesh that is already gone (#83 P4).
+	// replacing it makes the crowd manager log an engine warning for the mesh that is already gone (#83 P4). The warning lands
+	// on whichever test first replaces the Editor's startup world, which is this one only in the full `^Aetheln.` run order
+	// (Aetheln.GameCombat.Death sorts first among the tests that create a map). Count -1 ignores it so this test does not fail
+	// if that order changes; a new test that sorts earlier and replaces the startup world would inherit the warning and needs
+	// the same expectation.
 	AddExpectedMessagePlain(TEXT("Unable to find RecastNavMesh instance while trying to create UCrowdManager instance"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
 	AethelnTwoClientDeathTests::QueueTwoClientDeathAndRespawn(*this, nullptr);
 	return true;

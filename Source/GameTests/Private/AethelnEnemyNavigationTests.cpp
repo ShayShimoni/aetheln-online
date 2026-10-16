@@ -221,11 +221,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnEnemyPrototypeSpaceTest,
 
 bool FAethelnEnemyPrototypeSpaceTest::RunTest(const FString& Parameters)
 {
-	// Replacing a world that holds a built RecastNavMesh logs one engine warning from the crowd manager as the mesh is torn down
-	// (the Editor's startup world, which is this map, and then the world loaded below). It reports engine teardown, not a
-	// defect, so the warning is ignored here; any other warning or error still fails the test.
+	// Replacing a world that holds a built RecastNavMesh makes the crowd manager log an engine warning as the mesh is torn
+	// down: for the world this test releases with NewBlankMap, and, if no earlier test has replaced it, for the Editor's
+	// startup world, which is this map. It reports engine teardown, not a defect. Count 0 requires it at least once, as
+	// E12 does, so the test fails if the mesh is not in the map; any other warning or error still fails the test.
+	// Running this test replaces the Editor's open map, and LoadMap can stop at a save prompt in an interactive Editor.
 	AddExpectedMessagePlain(TEXT("Unable to find RecastNavMesh instance while trying to create UCrowdManager instance"),
-		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, -1);
+		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
 	// E14 (#83 P4): the prototype space itself. /Game/Maps/MovementPOC is loaded the way the Editor loads it, and the test
 	// reads what is saved in the map: one navigation bounds volume around the playable area, a built static RecastNavMesh,
 	// and one placed greybox enemy. The map is never saved, so nothing here changes it. A loaded editor world does not

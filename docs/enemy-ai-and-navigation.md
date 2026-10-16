@@ -504,7 +504,7 @@ same fixtures. Every test is written red first. Test names are under
 | E11 | P2 | Leash (`TargetLoss`): a target outside the leash is dropped, and the enemy returns home and is restored. |
 | E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. The fixture world does not run the scheduled ticks of the enemy's movement and path following components, so the test ticks both by hand (residual risk 4). |
 | E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link. Under a fixture impairment (100 ms lag, 5 % loss) it requires the attack (not the telegraph), Health, death, and reset, and only bounds the cue count, which is unreliable. Not the #45 network profiles. |
-| E14 | P4 | The prototype space (`PrototypeSpace`): the saved `MovementPOC` loads in the Editor world and holds one navigation bounds volume that covers the floor inside the walls, the player start, and the enemy; one static `RecastNavMesh` saved with built tiles; and one placed `AAethelnEnemyCharacter` that is the production class with the enemy controller class, possesses on spawn, and, begun by hand because a loaded Editor world does not begin play, has its home, its initial Health, and its granted attack. The enemy and the player start stand on the mesh, and a complete (not partial) path query joins them. The test never saves the map. An Editor-loaded world does not initialise its actors, so the test also runs the component initialisation a game world performs before it spawns the controller, and it ignores the one `UCrowdManager` warning the engine logs when a world holding a built `RecastNavMesh` is replaced (engine teardown); any other warning still fails it. |
+| E14 | P4 | The prototype space (`PrototypeSpace`): the saved `MovementPOC` loads in the Editor world and holds one navigation bounds volume that covers the floor inside the walls, the player start, and the enemy; one static `RecastNavMesh` saved with built tiles; and one placed `AAethelnEnemyCharacter` that is the production class with the enemy controller class, possesses on spawn, and, begun by hand because a loaded Editor world does not begin play, has its home, its initial Health, and its granted attack. The enemy and the player start stand on the mesh, and a complete (not partial) path query joins them. The test never saves the map. An Editor-loaded world does not initialise its actors, so the test also runs the component initialisation a game world performs before it spawns the controller, and it requires, and so ignores, the engine's `UCrowdManager` teardown warning that a world holding a built `RecastNavMesh` logs when it is replaced; any other warning still fails it. |
 | C1 | P3 | Config (`ProvisionalConfig`): every promoted value is in `Config/DefaultGame.ini` and reaches the class defaults. |
 
 ## Measurements
@@ -557,7 +557,7 @@ The raw logs are in the issue's delivery evidence (`issue-83-p4`).
 | Readable telegraph, wind-up, active, recovery, interruption, death, and reset states without notifies | State machine and replication; E3, E4, E5, E8 |
 | Minimum replication; clients cannot drive AI or contact | [Replication](#replication), [Server-Only Execution](#server-only-execution); E1, E8 |
 | Tests for target loss, unreachable paths, invalid commands, interruption ordering, death and reset, two-player contention, server-only execution | E1-E11 |
-| DoD: one greybox enemy navigates and attacks in the prototype space | On the provisional values: E12 (headless arena) and E13 in P3, and in P4 the enemy, the bounds volume, and the built mesh in `MovementPOC.umap` itself (E14). The box stays open until P4 merges. In a real session the enemy stays Idle until the player initial attributes exist (open decision 10). |
+| DoD: one greybox enemy navigates and attacks in the prototype space | On the provisional values: E12 (headless arena) and E13 in P3, and in P4 the enemy, the bounds volume, and the built mesh in `MovementPOC.umap` itself (E14). E14 does not show the enemy moving or attacking in `MovementPOC`; that is a later evidence item. The box stays open until a post-merge QA round on the `develop` revision shows the enemy navigating and attacking there, never because P4 merged. That round needs the #107 player values applied by the issue that owns them, or a recorded fixture method: in a real session the enemy stays Idle until the player initial attributes exist (open decision 10). |
 | DoD: focused automation and repeatable multiplayer evidence | E1-E14 |
 | DoD: budgets stay with #45 | Measurements only, P3 |
 
@@ -580,8 +580,10 @@ The raw logs are in the issue's delivery evidence (`issue-83-p4`).
    from P3 to this named package, a delivery-order decision under the standing
    lead authority
    ([PR 355 review](https://github.com/ShayShimoni/aetheln-online/pull/355#issuecomment-6158560412));
-   the owner's choice of `MovementPOC` is unchanged. The DoD box for the enemy in
-   the prototype space stays open until P4 merges.
+   the owner's choice of `MovementPOC` is unchanged. P4 does not close the DoD
+   box for the enemy in the prototype space: E14 does not show the enemy moving
+   or attacking in `MovementPOC`, and the box stays open until a post-merge QA
+   round on `develop` does (see the mapping above).
 
 ## Open Decisions
 
@@ -612,12 +614,16 @@ which the feel test re-tunes.
 8. **Prototype space:** resolved. `MovementPOC` (owner decision on #83). Whether
    `ServerDefaultMap` follows is a separate decision.
 9. **Navigation data in the client cook** (#120).
-10. **Player initial attributes** (#107): `AAethelnPlayerState` stays at zero in
-    config, and an eligible target needs Health above zero, so in a real session
-    the enemy has no eligible player until those values exist. The enemy placed
-    in `MovementPOC` therefore stands Idle at home and targets no real player
-    until the owner decides them. P4 changes no player value. E13 applies fixture
-    values by hand. The interactive two-client run is blocked on it.
+10. **Player initial attributes** (#107): decided by the owner as provisional
+    values on
+    [#107](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6176507597)
+    (2026-10-14); this document does not restate them. They are not applied yet:
+    `AAethelnPlayerState` stays at zero in config, and P4 applies nothing because
+    E14 needs no live player. The config change stays with the issue that owns the
+    player attribute defaults. An eligible target needs Health above zero, so until
+    that change lands the enemy placed in `MovementPOC` stands Idle at home and
+    targets no real player. E13 applies fixture values by hand. The interactive
+    two-client run waits on it.
 11. **`MovementPOC` audience** (#120): the registry lists the map as
     `client_only`, which was true while it held only client-side course
     geometry. It now carries navigation data and a server-driven enemy, and
