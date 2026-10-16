@@ -91,7 +91,14 @@ int32 UAethelnPrototypeSpaceAuthoringCommandlet::Main(const FString& Params)
 	// never ticks that far; Build() refuses to run while it is held.
 	Navigation->RemoveNavigationBuildLock(ENavigationBuildLock::AsyncLoadLock, UNavigationSystemV1::ELockRemovalRebuildAction::NoRebuild);
 	// The new volume registers with the navigation system on its tick, which a commandlet does not run.
+	UE_LOG(LogAethelnPrototypeSpaceAuthoring, Display, TEXT("Navigation before tick: %d pending bounds updates, %d nav data, %d registration candidates"),
+		Navigation->PendingNavBoundsUpdates.Num(), Navigation->NavDataSet.Num(), Navigation->NavDataRegistrationQueue.Num());
 	for (int32 Tick = 0; Tick < 3; ++Tick) { Navigation->Tick(0.1f); }
+	TArray<FBox> DataBounds;
+	const ANavigationData* Data = Navigation->GetDefaultNavDataInstance(FNavigationSystem::DontCreate);
+	const int32 BoundsCount = Data ? Navigation->GetNavigationBoundsForNavData(*Data, DataBounds) : -1;
+	UE_LOG(LogAethelnPrototypeSpaceAuthoring, Display, TEXT("Navigation after tick: %d pending bounds updates, %d nav data, %d bounds for the default data, octree %s"),
+		Navigation->PendingNavBoundsUpdates.Num(), Navigation->NavDataSet.Num(), BoundsCount, Navigation->GetNavOctree() ? TEXT("present") : TEXT("missing"));
 	const double BuildStart = FPlatformTime::Seconds();
 	Navigation->Build();
 	const double BuildMilliseconds = (FPlatformTime::Seconds() - BuildStart) * 1000.0;
