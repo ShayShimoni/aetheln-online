@@ -581,7 +581,8 @@ function Assert-RuntimeIntakeContract([object] $Registry, [string] $Context, [bo
 		'issue-100-epic-character-template',
 		'issue-100-epic-level-prototyping-template',
 		'issue-100-repository-authored-poc',
-		'issue-100-template-derived-poc-animation'
+		'issue-100-template-derived-poc-animation',
+		'issue-84-repository-authored-attack-definition'
 	)
 	Assert-True ($SourceGroupIds.Count -eq $ExpectedSourceGroups.Count) "$Context contains an unexpected source-group count."
 	foreach ($SourceGroupId in $ExpectedSourceGroups) {
@@ -618,6 +619,9 @@ function Assert-RuntimeIntakeContract([object] $Registry, [string] $Context, [bo
 
 		if ($Asset.repository_path -ceq 'Content/Maps/StarterMap.umap') {
 			Assert-True ($Asset.source_group_id -ceq 'issue-13-starter-map' -and $TemporaryEvidence.owner -ceq 'Issue #13' -and $Asset.audience -ceq 'shared') "$Context StarterMap governance does not match the Issue #13 bootstrap record."
+		}
+		elseif ($Asset.repository_path -ceq 'Content/Combat/Attacks/DA_SwordShieldBasicChain.uasset') {
+			Assert-True ($Asset.source_group_id -ceq 'issue-84-repository-authored-attack-definition' -and $TemporaryEvidence.owner -ceq 'Issue #84' -and $Asset.audience -ceq 'shared' -and $Asset.stable_id -ceq 'order.oathscar.ability.sword_shield_basic_chain') "$Context attack definition governance does not match the Issue #84 record."
 		}
 		else {
 			Assert-True ($TemporaryEvidence.owner -ceq 'Issue #100' -and $Asset.audience -ceq 'client_only') "$Context Issue #100 package '$($Asset.asset_path)' must remain client-only temporary POC content."
