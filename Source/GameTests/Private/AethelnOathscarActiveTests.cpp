@@ -546,6 +546,11 @@ bool FAethelnOathscarDefinitionsAndTagsTest::RunTest(const FString& Parameters)
 	// The stances: valid grant rules, with the fixture values; the production sections are checked above.
 	AethelnOathscarActiveTests::CheckStanceGrantRules<UAethelnAttackStanceTestAbility>(*this, TEXT("Attack Stance"));
 	AethelnOathscarActiveTests::CheckStanceGrantRules<UAethelnDefenseStanceTestAbility>(*this, TEXT("Defense Stance"));
+	// The one exception to "unset production values refuse the grant" (PR 361 low 2): the production stances pass grant validation, because
+	// the owner's provisional duration is set and their cost and cooldown are 0. They stay out of GrantedAbilities (checked above), so
+	// an ini edit that removes the duration, or adds a cooldown, flips this line.
+	TestTrue(TEXT("The production Attack Stance passes grant validation"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnAttackStanceAbility::StaticClass(), 1)));
+	TestTrue(TEXT("The production Defense Stance passes grant validation"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnDefenseStanceAbility::StaticClass(), 1)));
 	// The superseded skeletons (owner, 2026-10-13) are gone: their tags are not declared, their classes do not exist,
 	// and their config sections are removed.
 	for (const TCHAR* Name : { TEXT("Ability.Oathscar.GateStep"), TEXT("Ability.Oathscar.SwornRebuke"), TEXT("Ability.Oathscar.HoldTheLine"),
