@@ -856,20 +856,30 @@ person at the keyboard, which the harness cannot. They cannot run on the product
 `GrantedAbilities`, the values of Instant Strike and Parry are `TBD`, and the eight aim and time bounds are `TBD` and unset (the seam
 fails closed). A run supplies candidate values locally and untracked (for example in `Saved/Config/WindowsEditor/Game.ini`: the
 eight `Provisional...` keys of `/Script/GameCombat.AethelnAbilitySystemComponent`, `+GrantedAbilities` of the four active classes under
-`/Script/GameCombat.AethelnPlayerState`, the class sections of Instant Strike and Parry, and the four key slots of
+`/Script/GameCombat.AethelnPlayerState`, `ProvisionalInitialAttributes` of `/Script/GameCombat.AethelnPlayerState` and of
+`/Script/GameCombat.AethelnCombatAICharacter` (the tracked ini leaves both at 0, so a press that costs Endurance is
+`InsufficientResource` and a target has no Health to lose), the class sections of Instant Strike and Parry, and the four key slots of
 `[/Script/GameUI.AethelnPOCInputComponent]`) and records them verbatim as candidate values for that run, never as tuning. Keys: #82; the
-key slots are the run's own choice and decide nothing.
+key slots are the run's own choice and decide nothing. The stance cost is `TBD` and 0 unless the run supplies one, so a stance press
+shows no Endurance change: count its spend from the outcome line, not from Endurance.
+
+The run uses the `/Game/Maps/MovementPOC` map (`/Game/Maps/MovementPOC?game=/Script/GameCombat.AethelnCombatGameMode`). The game
+mode spawns no target, and the enemy placed in that map is #83 P4 ([Enemy AI and Navigation](enemy-ai-and-navigation.md), residual
+risk 7), not yet on `develop`. So the run places an `AAethelnCombatAICharacter` in front of client 1's start in the PIE level, untracked,
+and records where with the result.
 
 1. PIE net mode "Play As Client", two players and a separate server, launched with
    `?game=/Script/GameCombat.AethelnCombatGameMode`, under C1 (clean). On client 1, in Reticle mode, press each bound key: Instant
-   Strike (the dummy loses its authored damage once), Parry (the window opens and closes), Attack Stance, then Defense Stance (it
+   Strike (the target loses the damage the run authored once), Parry (the window opens and closes), Attack Stance, then Defense Stance (it
    replaces the first). Client 2 watches client 1: it must see the strike's phase state, the Parry and stance tags, and cues, and no
    outcome, record or Endurance change. Client 1's log prints one `LogAethelnActivationOutcome` line per press.
-2. In Cursor mode (Left Alt), press each key: nothing is sent and the log prints nothing. Recapture with Left Alt and a click; the click
-   is not an attack, and a fresh key press is needed.
+2. Switch to Cursor mode with Left Alt, then press each key: nothing is sent and the log prints no outcome line. Left Alt again
+   returns to Reticle mode, and a click after that is an attack. To recapture, click once in Cursor mode instead (the click is not an
+   attack and returns to Reticle mode); a fresh key press is needed after either.
 3. Repeat step 1 under each C2 kind of the #44 catalog (`Net PktLag`, `PktLagVariance`, `PktLoss`, `PktOrder`, `PktDup`, applied to the
-   side recorded with the result). For every press record the outcome and its reason, Endurance before and after (one spend per
-   accepted press, never two), the stance effects held (at most one), the hits taken by the dummy (one per strike), and client 2's view.
+   side recorded with the result). For every press record the outcome and its reason (the outcome log line), Endurance before and after for Instant Strike
+   and Parry (one spend per accepted press, never two; a stance shows none while its cost is 0, so for the stances read one outcome per
+   press), the stance effects held (at most one), the hits taken by the target (one per strike), and client 2's view.
    No duplicate, reordered or delayed request may commit twice.
 4. With no key bound, `Aetheln.Combat.Request <AbilityId> Press` with each active's `Ability.` tag starts the same press through the
    seam, bypassing the key and the Reticle gate; it is the way to run steps 1 and 3 before #82 decides the layout.

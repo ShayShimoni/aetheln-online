@@ -104,7 +104,8 @@ bool FAethelnActiveBindingsRouteTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Nothing was spent"), F.CostApplications, 0);
 
 		// A Reticle-mode press of each active is accepted by its own ability, with room for each one's window to pass.
-		// Red-first: if the route sent the chain's id, the record below would name the chain and the first count would fail.
+		// Red-first: the fixture always grants the chain, so if the route sent the chain's id the press would start chain step 1 and the record count
+		// would still pass; the line that fails is "The record names Instant Strike".
 		TestTrue(TEXT("A Reticle-mode press of Instant Strike is sent"), RouteActivePress(EAethelnPOCControlMode::Reticle, F.Player.Controller, Ids[0]));
 		if (TestEqual(TEXT("Instant Strike started its one step"), F.Records.Num(), 1)) { TestTrue(TEXT("The record names Instant Strike"), F.Records[0].AbilityId == Ids[0]); }
 		F.AdvanceTo(2.0);
