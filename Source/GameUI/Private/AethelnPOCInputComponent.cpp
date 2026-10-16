@@ -70,6 +70,14 @@ namespace
 		return true;
 	}
 
+	/** Instant Strike, Parry, Attack Stance, Defense Stance: the order of the four active actions and keys. */
+	TArray<FGameplayTag> ActiveAbilityIds()
+	{
+		return {
+			AethelnGameplayTags::Ability_Oathscar_InstantStrike.GetTag(), AethelnGameplayTags::Ability_Oathscar_Parry.GetTag(),
+			AethelnGameplayTags::Ability_Oathscar_AttackStance.GetTag(), AethelnGameplayTags::Ability_Oathscar_DefenseStance.GetTag() };
+	}
+
 	FModifyContextOptions BuildPOCMappingContextOptions()
 	{
 		FModifyContextOptions Options;
@@ -175,15 +183,25 @@ FAethelnPrimaryButtonRouter::EAction FAethelnPrimaryButtonRouter::Press(EAetheln
 	return bConsumed ? EAction::None : EAction::Attack;
 }
 
-bool SubmitPrimaryAttack(APlayerController* Controller)
+bool SubmitAbilityPress(APlayerController* Controller, FGameplayTag AbilityId)
 {
 	IAethelnCombatInputSink* Sink = Controller != nullptr ? Cast<IAethelnCombatInputSink>(Controller->PlayerState.Get()) : nullptr;
 	if (Sink == nullptr)
 	{
 		return false;
 	}
-	Sink->RequestAbilityPress(AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+	Sink->RequestAbilityPress(AbilityId);
 	return true;
+}
+
+bool SubmitPrimaryAttack(APlayerController* Controller)
+{
+	return SubmitAbilityPress(Controller, AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+}
+
+bool RouteActivePress(EAethelnPOCControlMode Mode, APlayerController* Controller, FGameplayTag AbilityId)
+{
+	return IsGameplayInputEnabled(Mode) && SubmitAbilityPress(Controller, AbilityId);
 }
 
 UAethelnPOCInputComponent::UAethelnPOCInputComponent()
@@ -325,6 +343,21 @@ void UAethelnPOCInputComponent::InitializeActions()
 
 	MappingContext->MapKey(JumpAction, EKeys::SpaceBar);
 	MappingContext->MapKey(SprintAction, EKeys::LeftShift);
+
+	// The four representative Oathscar actives (#260 P5), in the order of ActiveAbilityIds(). The key layout is #82's: a key
+	// maps only if one is configured, and none is by default.
+	const FKey ActiveKeys[] = { InstantStrikeKey, ParryKey, AttackStanceKey, DefenseStanceKey };
+	const TCHAR* const ActiveNames[] = { TEXT("IA_POC_InstantStrike"), TEXT("IA_POC_Parry"), TEXT("IA_POC_AttackStance"), TEXT("IA_POC_DefenseStance") };
+	for (int32 Index = 0; Index < static_cast<int32>(UE_ARRAY_COUNT(ActiveKeys)); ++Index)
+	{
+		UInputAction* Action = NewObject<UInputAction>(this, ActiveNames[Index], RF_Transient);
+		Action->ValueType = EInputActionValueType::Boolean;
+		ActiveActions.Add(Action);
+		if (ActiveKeys[Index].IsValid())
+		{
+			MappingContext->MapKey(Action, ActiveKeys[Index]);
+		}
+	}
 }
 
 void UAethelnPOCInputComponent::BindReceiver()
@@ -376,6 +409,11 @@ void UAethelnPOCInputComponent::BindReceiver()
 	BindAction(SprintAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleSprintStarted);
 	BindAction(SprintAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleSprintStopped);
 	BindAction(SprintAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleSprintStopped);
+	const TArray<FGameplayTag> ActiveIds = ActiveAbilityIds();
+	for (int32 Index = 0; Index < ActiveActions.Num(); ++Index)
+	{
+		BindAction(ActiveActions[Index], ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleActivePress, ActiveIds[Index]);
+	}
 	bBindingsApplied = true;
 }
 
@@ -727,6 +765,12 @@ void UAethelnPOCInputComponent::HandleViewportRecaptureReleased(
 	const FInputActionValue& Value)
 {
 	PrimaryButton.Release();
+}
+
+void UAethelnPOCInputComponent::HandleActivePress(const FInputActionValue& Value, FGameplayTag AbilityId)
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	RouteActivePress(ControlMode, OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr, AbilityId);
 }
 
 void UAethelnPOCInputComponent::HandleJumpStarted(const FInputActionValue& Value)

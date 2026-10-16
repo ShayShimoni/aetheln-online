@@ -2,9 +2,13 @@
 
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnChainTestFixture.h"
+#include "AethelnGameplayTags.h"
+#include "AethelnOathscarTestAbilities.h"
 #include "AethelnPOCInputComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 
 // #60 P6, Test Plan A22 (docs/attack-timeline-and-combo.md, Input path across modules). The left mouse button's
 // routing (FAethelnPrimaryButtonRouter) and the GameUI entry (SubmitPrimaryAttack) run against a real PlayerState
@@ -61,6 +65,88 @@ bool FAethelnAttackBindingSubmitsControlAimTest::RunTest(const FString& Paramete
 	TestEqual(TEXT("The fresh press started a step"), F.Records.Num(), 2);
 
 	F.Player.AbilitySystem->OnActivationOutcome.Remove(OutcomeHandle);
+	return true;
+}
+
+// #260 P5, Test Plan K14's routing leg (docs/gas-foundation.md, Representative Oathscar Actives). The press of Instant Strike, Parry,
+// Attack Stance and Defense Stance (RouteActivePress, which each bound key's handler calls) against a real PlayerState and seam in an
+// authority world. The fixture actives are granted for the first part; the second part grants none, as production does until their
+// values exist. The Enhanced Input wiring that calls the router is the manual step in the document: the key layout is #82's, so no
+// key is mapped by default.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnActiveBindingsRouteTest,
+	"Aetheln.POC.Input.ActiveBindingsRoute",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnActiveBindingsRouteTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnChainTests;
+	using EResult = EAethelnActivationResult;
+	const TArray<FGameplayTag> Ids = { AethelnGameplayTags::Ability_Oathscar_InstantStrike, AethelnGameplayTags::Ability_Oathscar_Parry,
+		AethelnGameplayTags::Ability_Oathscar_AttackStance, AethelnGameplayTags::Ability_Oathscar_DefenseStance };
+	const FGameplayTag AttackStance = AethelnGameplayTags::State_Oathscar_AttackStance;
+	const FGameplayTag DefenseStance = AethelnGameplayTags::State_Oathscar_DefenseStance;
+
+	{
+		FFixture F;
+		if (!F.Init(*this, { UAethelnInstantStrikeTestAbility::StaticClass(), UAethelnParryTestAbility::StaticClass(),
+			UAethelnAttackStanceTestAbility::StaticClass(), UAethelnDefenseStanceTestAbility::StaticClass() })) { return false; }
+		TArray<EResult> Outcomes;
+		const FDelegateHandle OutcomeHandle = F.Player.AbilitySystem->OnActivationOutcome.AddLambda([&Outcomes](uint32, EResult Result) { Outcomes.Add(Result); });
+		F.AdvanceTo(1.0);
+
+		// Cursor mode and no controller send nothing, for every active.
+		for (const FGameplayTag& Id : Ids)
+		{
+			TestFalse(TEXT("A Cursor-mode press sends nothing"), RouteActivePress(EAethelnPOCControlMode::Cursor, F.Player.Controller, Id));
+			TestFalse(TEXT("No controller, no press"), RouteActivePress(EAethelnPOCControlMode::Reticle, nullptr, Id));
+		}
+		TestEqual(TEXT("No request reached the server"), Outcomes.Num(), 0);
+		TestEqual(TEXT("Nothing was spent"), F.CostApplications, 0);
+
+		// A Reticle-mode press of each active is accepted by its own ability, with room for each one's window to pass.
+		// Red-first: if the route sent the chain's id, the record below would name the chain and the first count would fail.
+		TestTrue(TEXT("A Reticle-mode press of Instant Strike is sent"), RouteActivePress(EAethelnPOCControlMode::Reticle, F.Player.Controller, Ids[0]));
+		if (TestEqual(TEXT("Instant Strike started its one step"), F.Records.Num(), 1)) { TestTrue(TEXT("The record names Instant Strike"), F.Records[0].AbilityId == Ids[0]); }
+		F.AdvanceTo(2.0);
+		TestTrue(TEXT("A Reticle-mode press of Parry is sent"), RouteActivePress(EAethelnPOCControlMode::Reticle, F.Player.Controller, Ids[1]));
+		F.AdvanceTo(3.0);
+		TestTrue(TEXT("A Reticle-mode press of Attack Stance is sent"), RouteActivePress(EAethelnPOCControlMode::Reticle, F.Player.Controller, Ids[2]));
+		TestTrue(TEXT("It grants the Attack Stance tag"), F.Player.AbilitySystem->HasMatchingGameplayTag(AttackStance));
+		TestTrue(TEXT("A Reticle-mode press of Defense Stance is sent"), RouteActivePress(EAethelnPOCControlMode::Reticle, F.Player.Controller, Ids[3]));
+		TestTrue(TEXT("It replaces the Attack Stance with its own tag"), F.Player.AbilitySystem->HasMatchingGameplayTag(DefenseStance) && !F.Player.AbilitySystem->HasMatchingGameplayTag(AttackStance));
+		if (TestEqual(TEXT("The server answered each press"), Outcomes.Num(), 4))
+		{
+			for (const EResult Outcome : Outcomes) { TestEqual(TEXT("Each press is accepted"), Outcome, EResult::Accepted); }
+		}
+		TestEqual(TEXT("Each accepted press spent its cost once"), F.CostApplications, 4);
+		F.Player.AbilitySystem->OnActivationOutcome.Remove(OutcomeHandle);
+	}
+
+	// A binding whose active is not granted does nothing: the server answers ActivationBlocked, and nothing is spent, started or applied.
+	{
+		FFixture F;
+		if (!F.Init(*this)) { return false; }
+		TArray<EResult> Outcomes;
+		const FDelegateHandle OutcomeHandle = F.Player.AbilitySystem->OnActivationOutcome.AddLambda([&Outcomes](uint32, EResult Result) { Outcomes.Add(Result); });
+		F.AdvanceTo(1.0);
+		const float EnduranceBefore = F.Endurance();
+		for (const FGameplayTag& Id : Ids) { TestTrue(TEXT("The press is sent"), RouteActivePress(EAethelnPOCControlMode::Reticle, F.Player.Controller, Id)); }
+		if (TestEqual(TEXT("The server answered each press"), Outcomes.Num(), 4))
+		{
+			for (const EResult Outcome : Outcomes) { TestEqual(TEXT("An ungranted active is blocked"), Outcome, EResult::ActivationBlocked); }
+		}
+		TestEqual(TEXT("Nothing was spent"), F.CostApplications, 0);
+		TestEqual(TEXT("Endurance is untouched"), F.Endurance(), EnduranceBefore);
+		TestEqual(TEXT("No step started"), F.Records.Num(), 0);
+		TestFalse(TEXT("No Attack Stance"), F.Player.AbilitySystem->HasMatchingGameplayTag(AttackStance));
+		TestFalse(TEXT("No Defense Stance"), F.Player.AbilitySystem->HasMatchingGameplayTag(DefenseStance));
+		F.Player.AbilitySystem->OnActivationOutcome.Remove(OutcomeHandle);
+	}
+
+	// The key layout is #82's: the tracked ini maps no key to any of the four.
+	FConfigFile Tracked;
+	Tracked.Read(FPaths::ProjectConfigDir() / TEXT("DefaultGame.ini"));
+	TestNull(TEXT("DefaultGame.ini chooses no key for the actives"), Tracked.FindSection(TEXT("/Script/GameUI.AethelnPOCInputComponent")));
 	return true;
 }
 
