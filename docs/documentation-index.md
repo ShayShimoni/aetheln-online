@@ -120,23 +120,30 @@ subordinate to the specialized canonical product and technical documents.
 
 ## Rendered Artifacts
 
-- [Character Codex](../output/pdf/champions_of_the_first_cycle-2026-10-10-vesh-revamp-final.pdf)
-- [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-vesh-revamp-final.pdf)
+- [Character Codex](../output/pdf/champions_of_the_first_cycle-2026-10-16.pdf)
+- [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-16.pdf)
 
 The PDF codices are complete rendered snapshots of the canonical Markdown
-character and settlement documents, regenerated on 2026-10-10 with the Vesh
-spirit/Light story revision and the existing Kell redesign. Their complete
-source text was checked for parity and all 25 pages (16 character, 9 settlement)
-were rendered and visually inspected. Canonical Markdown remains the
-source of truth when later edits occur.
+character and settlement documents, regenerated on 2026-10-16 with the Issue
+#115 canon reconciliation of 2026-10-11 and the representative actives of
+Issue #260 recorded on 2026-10-13. Every H2 and H3 heading of each source was
+checked against the extracted PDF text, and the first page and the Order table
+were inspected visually. The character codex is 19 pages and the settlement
+codex is 11 pages. Canonical Markdown remains the source of truth when later
+edits occur; regenerate a codex with
+`node scripts/docs/render-codex-pdf.js <source.md> <out.pdf>`
+(`scripts/docs/render-codex-pdf.js`, which needs Node and Chrome or Edge).
 
 The earlier [character](../output/pdf/champions_of_the_first_cycle.pdf) and
 [settlement](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)
 editions are preserved as historical exports; they predate the current race
 revisions and do not define current canon. The intervening
 [Kell character edition](../output/pdf/champions_of_the_first_cycle-2026-10-10-kell-revamp-final.pdf)
-and [Kell settlement edition](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-kell-revamp-final.pdf)
-are likewise preserved; the Vesh editions above are the current snapshots.
+and [Kell settlement edition](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-kell-revamp-final.pdf),
+and the 2026-10-10
+[Vesh character edition](../output/pdf/champions_of_the_first_cycle-2026-10-10-vesh-revamp-final.pdf)
+and [Vesh settlement edition](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-vesh-revamp-final.pdf),
+are likewise preserved; the 2026-10-16 editions above are the current snapshots.
 
 ## Approved Art Direction
 
