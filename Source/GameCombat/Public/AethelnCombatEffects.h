@@ -241,3 +241,39 @@ public:
 	/** Server only. Applies the stagger to the target for Seconds; false for a non-finite or non-positive duration. */
 	static bool ApplyTo(UAbilitySystemComponent& AbilitySystemComponent, float Seconds);
 };
+
+/**
+ * A stance buff (#260 P4; docs/gas-foundation.md, Stance): a duration effect that grants its exclusive state tag for
+ * SetByCaller.Stance.Duration seconds. State.Dead removes it and refuses a new one, so no stance survives death or returns
+ * with the respawn. It carries no modifier: what a stance changes is TBD (#107) and, until decided, only its tag exists.
+ * Only the stance abilities apply it, and they remove the other stance first.
+ */
+UCLASS(Abstract)
+class GAMECOMBAT_API UAethelnStanceEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+protected:
+	/** Called from a subclass constructor with the state tag the subclass grants. */
+	void Configure(const FGameplayTag& StanceTag);
+};
+
+/** The Attack Stance buff: grants State.Oathscar.AttackStance. */
+UCLASS()
+class GAMECOMBAT_API UAethelnAttackStanceEffect : public UAethelnStanceEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnAttackStanceEffect();
+};
+
+/** The Defense Stance buff: grants State.Oathscar.DefenseStance. */
+UCLASS()
+class GAMECOMBAT_API UAethelnDefenseStanceEffect : public UAethelnStanceEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnDefenseStanceEffect();
+};

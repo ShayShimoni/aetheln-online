@@ -25,6 +25,13 @@ namespace AethelnGameplayTags
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Staggered);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stagger_Duration);
 
+	// #260 stances: each ability's identity, its exclusive state tag, and the shared duration. The stances have no cooldown tag.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_AttackStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_DefenseStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_AttackStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_DefenseStance);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stance_Duration);
+
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Dead);
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Damage_Wrought);
