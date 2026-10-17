@@ -825,10 +825,13 @@ FAethelnDodgeMovementDefinition UAethelnAbilitySystemComponent::GetDodgeMovement
 
 bool UAethelnAbilitySystemComponent::CanPredictDodge() const
 {
-	// P5 (D26): the commitment-window check from the owner's ClientCombatActivation record.
+	// D26: the commitment tag is server-only, so the owner's window comes from its ClientCombatActivation record.
+	const UWorld* World = GetWorld();
+	const AGameStateBase* GameState = World != nullptr ? World->GetGameState() : nullptr;
+	const double ServerNow = GameState != nullptr ? GameState->GetServerWorldTimeSeconds() : World != nullptr ? World->GetTimeSeconds() : 0.0;
 	const FGameplayAbilitySpec* Spec = nullptr;
 	const UAethelnDodgeAbility* Dodge = FindDodgeSource(Spec);
-	return Dodge != nullptr && GetDodgeMovementDefinition().IsValid()
+	return Dodge != nullptr && GetDodgeMovementDefinition().IsValid() && ServerNow >= OwnerCommitmentEndServerTime
 		&& !HasMatchingGameplayTag(AethelnGameplayTags::State_Dodging)
 		&& CheckEligibility(*Dodge, Spec->Handle) == EAethelnActivationResult::Accepted;
 }
@@ -1356,11 +1359,14 @@ void UAethelnAbilitySystemComponent::HandleChainResetTag(const FGameplayTag Tag,
 
 void UAethelnAbilitySystemComponent::ClientCombatActivation_Implementation(const FAethelnCombatActivationRecord& Record)
 {
+	OwnerCommitmentEndServerTime = Record.Windows.CancelOpen > 0.0 ? Record.StartServerTime + Record.Windows.CancelOpen : 0.0;
 	OnCombatActivation.Broadcast(Record);
 }
 
 void UAethelnAbilitySystemComponent::ClientChainEnded_Implementation(const FGuid& ActivationId, EAethelnChainEndReason Reason)
 {
+	// Every chain end removes the commitment tag on the server (ResetChain), so the owner's window ends with it.
+	OwnerCommitmentEndServerTime = 0.0;
 	OnChainEnded.Broadcast(ActivationId, Reason);
 }
 

@@ -46,6 +46,8 @@ public:
 
 	/** The local controller's ability press (#60 P6): forwards to the ASC's activation request. Intent only. */
 	virtual void RequestAbilityPress(FGameplayTag AbilityId) override;
+	/** The local controller's ability release (#18 P5): the same request with the Release phase. Intent only. */
+	virtual void RequestAbilityRelease(FGameplayTag AbilityId) override;
 
 	/** HUD (#61): the attributes and owned timed tags this machine currently has. Presentation only. */
 	virtual FAethelnHudSnapshot GetHudSnapshot() const override;
