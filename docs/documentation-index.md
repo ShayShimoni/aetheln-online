@@ -122,6 +122,9 @@ subordinate to the specialized canonical product and technical documents.
 
 - [Character Codex](../output/pdf/champions_of_the_first_cycle-2026-10-16.pdf)
 - [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-16.pdf)
+- [Game Design Bible Codex](../output/pdf/Game_Design_Bible-2026-10-17.pdf)
+- [Playable Peoples Codex](../output/pdf/Playable_Peoples_of_Aetheln-2026-10-17.pdf)
+- [Progression, Loot, and Skein Codex](../output/pdf/Progression_Loot_Skein_and_Character_Creation-2026-10-17.pdf)
 
 The PDF codices are complete rendered snapshots of the canonical Markdown
 character and settlement documents, regenerated on 2026-10-16 with the Issue
@@ -133,6 +136,15 @@ codex is 11 pages. Canonical Markdown remains the source of truth when later
 edits occur; regenerate a codex with
 `node scripts/design/render-codex-pdf.js <source.md> <out.pdf>`
 (`scripts/design/render-codex-pdf.js`, which needs Node and Chrome or Edge).
+
+The Game Design Bible, Playable Peoples, and Progression, Loot, and Skein
+codices are the remaining canonical product documents, rendered the same way
+on 2026-10-17 from current canonical Markdown. Every H2 and H3 heading of each
+source was checked against the extracted PDF text, and the first page and a
+table or code-block page were inspected visually. The Bible codex is 13 pages,
+the Playable Peoples codex is 14 pages, and the Progression codex is 17 pages.
+In the narrow Stable ID table columns a long ID may wrap at a dot or underscore;
+the Markdown is the searchable source. Regenerate them with the same command.
 
 The earlier [character](../output/pdf/champions_of_the_first_cycle.pdf) and
 [settlement](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)
