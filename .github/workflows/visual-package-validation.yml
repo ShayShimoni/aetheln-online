@@ -45,7 +45,7 @@ permissions:
 jobs:
   validate:
     continue-on-error: ${{ inputs.non_authoritative == true }}
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 20
     outputs:
       report_artifact_id: ${{ steps.report_artifact.outputs.artifact-id }}

@@ -179,7 +179,7 @@ can override a nonzero runner result.
 The portable CI suite registers `unreal-automation-tests`
 (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) as a required fixture
 check. It validates the PowerShell runner contract without requiring Unreal
-Engine. The GitHub-hosted `windows-latest` portable job does not run the real
+Engine. The portable job on the `aetheln-checks` runners does not run the real
 engine automation.
 
 The real run is engine-dependent and fits the accepted Issue #16
@@ -209,7 +209,7 @@ step removes the job's disposable control checkout and any earlier ones from the
 runner workspace (issue #243). Every
 step continues on error, and the job is separate from the compile, so a failed
 or skipped automation step uploads no report and never affects the compile job
-or the native receipt. The hosted `unreal-receipt-shadow` job publishes a
+or the native receipt. The `unreal-receipt-shadow` job publishes a
 shadow-only `unreal-editor-automation` receipt from the report, or prints the
 fixed `automation_reason` and fails red when it is missing. Harness and build
 output stay in the runner temp directory, which is wiped after the job. The

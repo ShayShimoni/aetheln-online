@@ -58,9 +58,10 @@ foreach ($WorkflowSource in @($Workflow, $VisualWorkflow, $DeliveryWorkflow, $Re
 		Assert-True ($Identity -cmatch '^actions/[a-z0-9-]+@[0-9a-f]{40}$') "Remote action '$Identity' must be pinned to one full lowercase commit SHA."
 	}
 }
-# Issue #214: the delivery-policy job is hosted, read-only, and bounded; it
-# never targets or queues behind the engine runner.
-Assert-True ($DeliveryWorkflow -match '(?m)^    runs-on: windows-latest\r?$' -and $DeliveryWorkflow -match '(?m)^    timeout-minutes: 5\r?$' -and $DeliveryWorkflow -match '(?m)^permissions:\r?\n  contents: read\r?$' -and $DeliveryWorkflow -notmatch 'self-hosted|aetheln-engine|concurrency:|schedule:|workflow_dispatch') 'The delivery-policy workflow must stay a bounded, read-only, hosted pull-request job outside engine scheduling.'
+# Issue #214: the delivery-policy job is read-only and bounded; it never targets
+# or queues behind the engine runner. Issue #376 moves it to the aetheln-checks
+# runners.
+Assert-True ($DeliveryWorkflow -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $DeliveryWorkflow -match '(?m)^    timeout-minutes: 5\r?$' -and $DeliveryWorkflow -match '(?m)^permissions:\r?\n  contents: read\r?$' -and $DeliveryWorkflow -notmatch 'aetheln-engine|concurrency:|schedule:|workflow_dispatch') 'The delivery-policy workflow must stay a bounded, read-only pull-request job on the aetheln-checks runners outside engine scheduling.'
 Assert-MatchCount -Text $Workflow -Pattern ('(?m)^\s+uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 12 -Message 'Downloader use must be limited to ten receipt inputs, aggregate selector, and dormant authority aggregate.'
 foreach ($OutputName in @('report_artifact_id','report_artifact_name','report_artifact_digest','report_sha256','report_size_bytes')) {
 	$CallBinding = [regex]::Escape('${{ jobs.validate.outputs.' + $OutputName + ' }}')
@@ -78,18 +79,32 @@ Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow 
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
 Assert-MatchCount -Text $Workflow -Pattern 'timeout-minutes:\s*1440' -Expected 0 -Message 'No job may hold the engine runner for a 24-hour bound.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' -Expected 7 -Message 'Exactly seven jobs (trusted compile, trusted editor automation, trusted content validation, and four phases) may target the engine runner.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 10 -Message 'Exactly selector, portable gates, classifier, five receipt publishers, aggregate, and dormant authority run on GitHub-hosted Windows.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -Expected 10 -Message 'Exactly selector, portable gates, classifier, five receipt publishers, aggregate, and dormant authority run on the aetheln-checks runners.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 0 -Message 'No job may run on a GitHub-hosted runner (issue #376).'
 
 # Every engine-runner concurrency block queues FIFO without cancelling pending
 # or in-progress work. queue: single would silently cancel a pending trusted
-# compile; cancel-in-progress: true would cancel healthy milestone work.
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+group: aetheln-engine-runner\r?$' -Expected 7 -Message 'Exactly seven jobs must share the engine-runner concurrency group.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+queue: max\r?$' -Expected 7 -Message 'Every engine-runner concurrency block must use queue: max so pending jobs wait FIFO instead of being replaced.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+cancel-in-progress: false\r?$' -Expected 7 -Message 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
+# compile; cancel-in-progress: true would cancel healthy milestone work. The
+# seven engine jobs and quality-gates (issue #376: the suite must never run
+# beside a compile on the same PC) share the group.
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+group: aetheln-engine-runner\r?$' -Expected 8 -Message 'Exactly the seven engine jobs and quality-gates must share the engine-runner concurrency group.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+queue: max\r?$' -Expected 8 -Message 'Every engine-runner concurrency block must use queue: max so pending jobs wait FIFO instead of being replaced.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+cancel-in-progress: false\r?$' -Expected 8 -Message 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
+foreach ($JobName in $JobOrder) {
+	$JobRunsOn = [regex]::Match(([string] $JobBodies[$JobName]), '(?m)^    runs-on: (?<value>[^\r\n]*)\r?$').Groups['value'].Value
+	$JobQueued = ([string] $JobBodies[$JobName]) -match '(?m)^\s+group: aetheln-engine-runner\r?$'
+	if ($JobRunsOn -ceq '[self-hosted, Windows, X64, aetheln-checks]') {
+		Assert-True ($JobQueued -eq ($JobName -ceq 'quality-gates')) "$JobName on the aetheln-checks runners may join the engine-runner queue only if it is quality-gates."
+	} elseif ($JobRunsOn -ceq '[self-hosted, Windows, X64, aetheln-engine]') {
+		Assert-True $JobQueued "$JobName on the engine runner must join the engine-runner queue."
+	} else {
+		Assert-True (($JobName -ceq 'visual-proof') -and $JobRunsOn.Length -eq 0) "$JobName must target the aetheln-checks or the engine labels; found '$JobRunsOn'."
+	}
+}
 Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No engine job may cancel in-progress work.'
 
 # No authoritative job-level predicate may silently skip after a failed,
-# cancelled, or skipped prerequisite. The additive hosted aggregate always
+# cancelled, or skipped prerequisite. The additive aggregate always
 # diagnoses every dependency conclusion. The dormant authority boundary also
 # uses always() so an activated version fails red instead of becoming a skipped
 # required check when its aggregate dependency is not successful.
@@ -104,7 +119,7 @@ $NeedsResultsOutsideEvidenceBoundaries = ($JobOrder | Where-Object { $_ -notin @
 Assert-True ($NeedsResultsOutsideEvidenceBoundaries -notmatch 'needs\.[a-z-]+\.result') 'Only the aggregate and dormant authority boundary may inspect dependency conclusions; no producer job may bypass normal prerequisite propagation.'
 Assert-MatchCount -Text ([string] $JobBodies['ci-acceptance-shadow']) -Pattern 'needs\.(?:content|portable|native|unreal|visual)-receipt-shadow\.result' -Expected 5 -Message 'The aggregate must inspect exactly the five receipt publisher conclusions.'
 
-# GitHub-hosted jobs carry explicit conservative bounds.
+# Check-runner jobs carry explicit conservative bounds.
 Assert-True (([string] $JobBodies['quality-gates']) -match '(?m)^\s+timeout-minutes: 40\r?$') 'quality-gates must declare an explicit 40-minute bound.'
 Assert-True (([string] $JobBodies['change-impact']) -match '(?m)^\s+timeout-minutes: 10\r?$') 'change-impact must declare an explicit 10-minute bound.'
 Assert-True (([string] $JobBodies['change-impact']) -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'change-impact must run only for pull requests.'
@@ -112,7 +127,7 @@ Assert-True (([string] $JobBodies['change-impact']) -notmatch 'aetheln-engine-ru
 $ShadowSelection = [string] $JobBodies['ci-selection-shadow']
 Assert-True ($ShadowSelection -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$" -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'Shadow selection must be pull-request-only and bounded to ten minutes.'
 Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'The selector itself must not control legacy job selection; dependent Package 3C evidence validation may still fail red.'
-Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner') 'Shadow selection must have no predecessor or engine-runner admission surface.'
+Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch 'aetheln-engine|concurrency:') 'Shadow selection must have no predecessor or engine-runner admission surface.'
 $ExpectedSelectorOutputs = @(
 	'accepted_base_sha','attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
 	'controller_contract_required','controller_operational_proof_required',
@@ -131,7 +146,7 @@ Assert-True ($ShadowSelection -match '(?m)^        id: selector_artifact\r?$' -a
 Assert-True ($ShadowSelection -match 'path: \$\{\{ runner\.temp \}\}/ci-selection-shadow\.json' -and $ShadowSelection -notmatch '(?m)^\s+path: .*\*') 'Shadow selection must upload exactly one bounded report file.'
 Assert-True ($ShadowSelection -notmatch '(?m)^\s+if: always\(\)\r?$') 'A failed selector or anchor validator must not publish an invalid nonce-less selector artifact.'
 
-# Package 3C adds four truthful receipt publishers and a hosted reconciler.
+# Package 3C adds four truthful receipt publishers and a reconciler.
 # Selection remains additive: every publisher is PR-only, bounded, directly
 # downloads the selector and one raw producer by upload ID, and has no engine
 # admission. Unsupported selected checks produce a green no-acceptance gap;
@@ -146,7 +161,7 @@ $ReceiptContracts = @(
 foreach ($Receipt in $ReceiptContracts) {
 	$ReceiptBody = [string] $JobBodies[$Receipt.Job]
 	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?\n(?=    if: )" -and $ReceiptBody -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
-	Assert-True ($ReceiptBody -match '(?m)^    runs-on: windows-latest\r?$' -and $ReceiptBody -match '(?m)^    timeout-minutes: 10\r?$' -and $ReceiptBody -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Job) must remain bounded and hosted."
+	Assert-True ($ReceiptBody -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $ReceiptBody -match '(?m)^    timeout-minutes: 10\r?$' -and $ReceiptBody -notmatch 'aetheln-engine|concurrency:') "$($Receipt.Job) must remain bounded on the aetheln-checks runners."
 	Assert-MatchCount -Text $ReceiptBody -Pattern ('(?m)^        uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 2 -Message "$($Receipt.Job) must download selector and raw evidence by exact artifact ID."
 	$ProducerId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.' + $Receipt.ArtifactOutput + ' }}')
 	Assert-True ($ReceiptBody -match 'artifact-ids: \$\{\{ needs\.ci-selection-shadow\.outputs\.selector_artifact_id \}\}' -and $ReceiptBody -match ("artifact-ids: " + $ProducerId)) "$($Receipt.Job) must use direct needs artifact-ID bindings."
@@ -159,8 +174,8 @@ foreach ($Receipt in $ReceiptContracts) {
 $AggregateShadow = [string] $JobBodies['ci-acceptance-shadow']
 Assert-True ($Workflow -notmatch 'delivery-harness|delivery_harness_required' -and $AggregateShadow -notmatch 'delivery-harness') 'Retired delivery harness must not be a live selector or aggregate obligation.'
 Assert-True ($AggregateShadow -match '(?m)^    if: always\(\)\r?$' -and $AggregateShadow -notmatch '(?m)^    continue-on-error:') 'Acceptance aggregation must always diagnose dependencies while unexpected diagnostic failures remain visible.'
-Assert-True ($AggregateShadow -match '(?m)^    runs-on: windows-latest\r?$' -and $AggregateShadow -match '(?m)^    timeout-minutes: 10\r?$') 'Acceptance aggregation must be bounded on GitHub-hosted Windows.'
-Assert-True ($AggregateShadow -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') 'Acceptance aggregation must never hold or target the engine runner.'
+Assert-True ($AggregateShadow -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $AggregateShadow -match '(?m)^    timeout-minutes: 10\r?$') 'Acceptance aggregation must be bounded on the aetheln-checks runners.'
+Assert-True ($AggregateShadow -notmatch 'aetheln-engine|concurrency:') 'Acceptance aggregation must never hold or target the engine runner.'
 Assert-True ($AggregateShadow -match '(?ms)^    permissions:\r?\n      actions: read\r?\n      contents: read\r?$' -and $AggregateShadow -notmatch '(?m)^      [a-z-]+: write\r?$') 'Acceptance aggregation must have only job-scoped actions:read and contents:read.'
 $AggregateNeedsMatch = [regex]::Match($AggregateShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
 Assert-True $AggregateNeedsMatch.Success 'Acceptance aggregation must declare an explicit direct-needs list.'
@@ -459,21 +474,22 @@ function Assert-DispatchWorkflow([string] $Source, [hashtable] $Shape) {
 
 	$Jobs = Get-WorkflowJobBody $Text
 	$GatesJob = $Prefix + '-gates'
-	Assert-True ((@($Jobs.Keys) -join ',') -ceq ((@($GatesJob) + @($Shape.Phases | ForEach-Object { $_.Job })) -join ',')) "$Label must define exactly the hosted guard job and the four phase jobs, in order."
+	Assert-True ((@($Jobs.Keys) -join ',') -ceq ((@($GatesJob) + @($Shape.Phases | ForEach-Object { $_.Job })) -join ',')) "$Label must define exactly the guard job and the four phase jobs, in order."
 	$GatesBody = [string] $Jobs[$GatesJob]
 	$GatesStepsIndex = $GatesBody.IndexOf('    steps:', [StringComparison]::Ordinal)
-	Assert-True ($GatesStepsIndex -gt 0 -and $GatesBody.Substring(0, $GatesStepsIndex) -ceq (@("  ${GatesJob}:", '    runs-on: windows-latest', '    timeout-minutes: 30', '') -join "`n")) "$GatesJob must stay a 30-minute hosted job with no condition, predecessor, environment, or runner admission."
+	Assert-True ($GatesStepsIndex -gt 0 -and $GatesBody.Substring(0, $GatesStepsIndex) -ceq (@("  ${GatesJob}:", '    runs-on: [self-hosted, Windows, X64, aetheln-checks]', '    timeout-minutes: 30', '') -join "`n")) "$GatesJob must stay a 30-minute job on the aetheln-checks runners with no condition, predecessor, environment, or engine-runner admission."
 	$ExpectedGatesSteps = @(
 		(@(('      - uses: ' + $CheckoutAction), '        with:', '          ref: ${{ github.sha }}', '          lfs: false', '          persist-credentials: false', '') -join "`n"),
 		(@(('      - name: ' + $Shape.GuardStep), '        shell: powershell', ('        run: powershell -NoProfile -File scripts/ci/Invoke-ReleasePackaging.ps1 -Mode ' + $Shape.GuardMode), '') -join "`n"),
 		(@('      - name: Fetch StarterMap LFS object', '        shell: powershell', '        run: git lfs pull --include "Content/Maps/StarterMap.umap"', '') -join "`n"),
+		(@('      - name: Remove persisted test results', '        shell: powershell', "        run: if (Test-Path -LiteralPath 'TestResults') { Remove-Item -LiteralPath 'TestResults' -Recurse -Force }", '') -join "`n"),
 		(@('      - name: Run CI suite', '        id: suite', '        shell: powershell', '        run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1', '') -join "`n"),
 		(Get-ReleaseUploadStep -Name 'Upload machine-readable report' -Condition "always() && steps.suite.outcome != 'skipped'" -Artifact $Shape.CiArtifact -Path 'TestResults/ci-report.json' -Retention $Shape.Retention)
 	)
 	$GatesSteps = @(Get-StepBlock $GatesBody)
-	Assert-True ($GatesSteps.Count -eq $ExpectedGatesSteps.Count) "$GatesJob must keep exactly its five reviewed steps."
+	Assert-True ($GatesSteps.Count -eq $ExpectedGatesSteps.Count) "$GatesJob must keep exactly its six reviewed steps."
 	for ($Index = 0; $Index -lt $ExpectedGatesSteps.Count; $Index++) {
-		Assert-True ($GatesSteps[$Index] -ceq $ExpectedGatesSteps[$Index]) ("{0} step {1} must match the reviewed text: checkout at the dispatched SHA, the guard as the first and only command of its own step, then the LFS fetch, the portable suite, and the report upload." -f $GatesJob, ($Index + 1))
+		Assert-True ($GatesSteps[$Index] -ceq $ExpectedGatesSteps[$Index]) ("{0} step {1} must match the reviewed text: checkout at the dispatched SHA, the guard as the first and only command of its own step, then the LFS fetch, the removal of persisted test results, the portable suite, and the report upload." -f $GatesJob, ($Index + 1))
 	}
 
 	$EngineCheckout = @(('      - uses: ' + $CheckoutAction), '        with:', '          ref: ${{ github.sha }}', '          lfs: false', '          path: milestone', '          fetch-depth: 0', '          persist-credentials: false', '') -join "`n"
@@ -536,10 +552,12 @@ function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
 		foreach ($RunsOn in [regex]::Matches($Text, '(?m)^\s+runs-on:(?<value>.*)$')) {
 			$Value = $RunsOn.Groups['value'].Value.Trim()
 			$EngineWorkflow = $Name -cin @('prototype-quality-gates.yml', 'release-packaging.yml', 'develop-packaging.yml')
-			Assert-True (($Value -ceq 'windows-latest') -or ($EngineWorkflow -and $Value -ceq '[self-hosted, Windows, X64, aetheln-engine]')) "$Name may target only windows-latest, or the exact engine label set in an engine workflow; found '$Value'."
+			Assert-True (($Value -ceq '[self-hosted, Windows, X64, aetheln-checks]') -or ($EngineWorkflow -and $Value -ceq '[self-hosted, Windows, X64, aetheln-engine]')) "$Name may target only the exact aetheln-checks label set, or the exact engine label set in an engine workflow; found '$Value'."
 		}
+		# Issue #376: every job now runs on the owner's PC; the no-interpolation
+		# rule stays scoped to the engine runner, whose jobs hold the engine host.
 		foreach ($Job in (Get-WorkflowJobBody $Text).GetEnumerator()) {
-			if ($Job.Value -match 'self-hosted') {
+			if ($Job.Value -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]$') {
 				Assert-True (-not (Test-UntrustedWorkflowInterpolation $Job.Value)) "$Name job $($Job.Key) runs on the engine runner and must not interpolate event or ref data."
 			}
 		}
@@ -591,7 +609,8 @@ $ReleaseMutations = @(
 	@{ Name = 'shorten retention'; Old = 'retention-days: 90'; New = 'retention-days: 30' },
 	@{ Name = 'upload a wildcard'; Old = 'path: milestone/TestResults/release-evidence.json'; New = 'path: milestone/TestResults/*' },
 	@{ Name = 'upload packaged bytes'; Old = 'path: milestone/TestResults/engine-runner-report.json'; New = 'path: milestone/Saved' },
-	@{ Name = 'route the guard to a runner label'; Old = '    runs-on: windows-latest'; New = '    runs-on: self-hosted' }
+	@{ Name = 'route the guard to a runner label'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: self-hosted' },
+	@{ Name = 'route the guard to a hosted runner'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: windows-latest' }
 )
 foreach ($Mutation in $ReleaseMutations) {
 	$Mutated = if ($null -eq $Mutation.Old) { $ReleaseWorkflowLf + $Mutation.New } else { Edit-WorkflowText -Text $ReleaseWorkflowLf -Old $Mutation.Old -New $Mutation.New }
@@ -641,7 +660,8 @@ $DevelopMutations = @(
 	@{ Name = 'read a secret'; Old = "      UE_ADDITIONAL_PLUGIN_PATHS: ''`n"; New = "      UE_ADDITIONAL_PLUGIN_PATHS: ''`n" + '      AETHELN_TOKEN: ${{ secrets.GITHUB_TOKEN }}' + "`n" },
 	@{ Name = 'raise the workflow permission'; Old = "  contents: read`n"; New = "  contents: write`n" },
 	@{ Name = 'interpolate the ref into an engine run'; Old = "-SourceRevision '`${{ github.sha }}'"; New = "-SourceRevision '`${{ github.ref }}'" },
-	@{ Name = 'route the guard to a runner label'; Old = '    runs-on: windows-latest'; New = '    runs-on: self-hosted' }
+	@{ Name = 'route the guard to a runner label'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: self-hosted' },
+	@{ Name = 'route the guard to a hosted runner'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: windows-latest' }
 )
 foreach ($Mutation in $DevelopMutations) {
 	$Mutated = if ($null -eq $Mutation.Old) { $DevelopWorkflowLf + $Mutation.New } else { Edit-WorkflowText -Text $DevelopWorkflowLf -Old $Mutation.Old -New $Mutation.New }
@@ -673,10 +693,13 @@ $RepositoryMutations = @(
 	@{ Name = 'add an issue_comment trigger'; File = 'delivery-policy.yml'; Old = "on:`n  pull_request:`n"; New = "on:`n  issue_comment:`n  pull_request:`n" },
 	@{ Name = 'switch to pull_request_target'; File = 'delivery-policy.yml'; Old = "  pull_request:`n    types:"; New = "  pull_request_target:`n    types:" },
 	@{ Name = 'add a third dispatch workflow'; File = 'visual-package-validation.yml'; Old = "on:`n  workflow_call:`n"; New = "on:`n  workflow_dispatch:`n  workflow_call:`n" },
-	@{ Name = 'target a bare self-hosted label'; File = 'delivery-policy.yml'; Old = '    runs-on: windows-latest'; New = '    runs-on: self-hosted' },
-	@{ Name = 'target the engine labels from a hosted workflow'; File = 'visual-package-validation.yml'; Old = '    runs-on: windows-latest'; New = '    runs-on: [self-hosted, Windows, X64, aetheln-engine]' },
-	@{ Name = 'target a runs-on expression'; File = 'delivery-policy.yml'; Old = '    runs-on: windows-latest'; New = '    runs-on: ${{ github.event.inputs.runner }}' },
-	@{ Name = 'target a runner group mapping'; File = 'delivery-policy.yml'; Old = "    runs-on: windows-latest`n"; New = "    runs-on:`n      group: aetheln`n" },
+	@{ Name = 'target a bare self-hosted label'; File = 'delivery-policy.yml'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: self-hosted' },
+	@{ Name = 'target a GitHub-hosted runner'; File = 'delivery-policy.yml'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: windows-latest' },
+	@{ Name = 'target a GitHub-hosted runner from a check job'; File = 'prototype-quality-gates.yml'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: windows-latest' },
+	@{ Name = 'target the engine labels from a non-engine workflow'; File = 'visual-package-validation.yml'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: [self-hosted, Windows, X64, aetheln-engine]' },
+	@{ Name = 'target the engine labels from the delivery policy'; File = 'delivery-policy.yml'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: [self-hosted, Windows, X64, aetheln-engine]' },
+	@{ Name = 'target a runs-on expression'; File = 'delivery-policy.yml'; Old = '    runs-on: [self-hosted, Windows, X64, aetheln-checks]'; New = '    runs-on: ${{ github.event.inputs.runner }}' },
+	@{ Name = 'target a runner group mapping'; File = 'delivery-policy.yml'; Old = "    runs-on: [self-hosted, Windows, X64, aetheln-checks]`n"; New = "    runs-on:`n      group: aetheln`n" },
 	@{ Name = 'drop the top-level permissions'; File = 'delivery-policy.yml'; Old = "permissions:`n  contents: read`n"; New = '' },
 	@{ Name = 'grant write-all'; File = 'delivery-policy.yml'; Old = "permissions:`n  contents: read`n"; New = "permissions: write-all`n" },
 	@{ Name = 'grant a job-level write'; File = 'prototype-quality-gates.yml'; Old = "    permissions:`n      actions: read`n"; New = "    permissions:`n      actions: write`n" },
@@ -887,7 +910,7 @@ foreach ($Document in @($SchedulingDecision, $CiDocumentation)) {
 Write-Output 'PASS: milestone phases are bounded, FIFO-queued, evidence-separated, schedule-only, gated behind portable success, and cannot starve trusted compile for 24 hours'
 Write-Output 'PASS: trusted compile requires portable success and an engine-impacting change; no manual or monolithic package/smoke entry point remains'
 Write-Output 'PASS: accepted decisions TA-011 and TA-012 describe the same schedule-only, portable-first, fail-closed selective gates as the workflow and CI documentation'
-Write-Output 'PASS: Package 3C receipt and aggregate jobs remain PR-selected, directly bound, hosted, bounded, non-authoritative, and isolated from engine scheduling'
+Write-Output 'PASS: Package 3C receipt and aggregate jobs remain PR-selected, directly bound, on the check runners, bounded, non-authoritative, and isolated from engine scheduling'
 Write-Output 'PASS: the TA-022 release workflow is dispatch-only, guard-first, owner- and release/*-gated, attempt-1, read-only, parity-bound to the scheduled phases, and uploads only six reports; every pin fails red under mutation'
 Write-Output 'PASS: the TA-024 develop workflow is dispatch-only, guard-first, owner- and exact-develop-gated, attempt-1, read-only, parity-bound to the scheduled phases with their artifact names, and uploads only five reports; every pin fails red under mutation'
 Write-Output 'PASS: repository workflows keep closed trigger, file, runs-on, and permission allowlists, and no engine job interpolates event or ref data'

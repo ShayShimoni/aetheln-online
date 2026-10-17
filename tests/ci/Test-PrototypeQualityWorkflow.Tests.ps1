@@ -90,7 +90,7 @@ Assert-True ($AcceptanceShadow -match '(?ms)^    permissions:\r?\n      actions:
 # accepted base sparse control path rather than candidate executable bytes.
 Assert-True ($ShadowSelection -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'The shadow selector must run only for pull requests.'
 Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'The selector itself remains observational and cannot control legacy job selection; dependent Package 3C evidence validation may still fail red.'
-Assert-True ($ShadowSelection -match '(?m)^\s+runs-on: windows-latest\r?$' -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'The shadow selector must be a bounded GitHub-hosted job.'
+Assert-True ($ShadowSelection -match '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'The shadow selector must be a bounded job on the aetheln-checks runners.'
 Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:') 'The accepted-base shadow selector must remain dependency-free.'
 $ExpectedSelectorOutputs = @(
 	'accepted_base_sha','attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
@@ -103,7 +103,7 @@ foreach ($OutputName in $ExpectedSelectorOutputs) {
 }
 Assert-MatchCount -Text $ShadowSelection -Pattern '(?m)^      [a-z_]+: ' -Expected $ExpectedSelectorOutputs.Count -Message 'The selector must expose only the reviewed Package 3C decisions and artifact bindings.'
 Assert-True ($ShadowSelection -match '(?m)^      accepted_base_sha: \$\{\{ steps\.comparison\.outputs\.accepted_base_sha \}\}\r?$') 'The selector must expose the verified synthetic-merge first parent so consumers bind the same base the selector compared.'
-Assert-True ($ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner|needs\.') 'The shadow selector must not admit or influence engine work.'
+Assert-True ($ShadowSelection -notmatch 'aetheln-engine|concurrency:|needs\.') 'The shadow selector must not admit or influence engine work.'
 Assert-MatchCount -Text $ShadowSelection -Pattern "(?m)^\s+- uses: $CheckoutActionPattern\r?$" -Expected 1 -Message 'The shadow selector must perform exactly one pinned checkout.'
 Assert-True ($ShadowSelection -match 'ref: \$\{\{ steps\.comparison\.outputs\.accepted_base_sha \}\}' -and $ShadowSelection -match 'sparse-checkout: scripts/ci/Get-CiSelection\.ps1' -and $ShadowSelection -match 'persist-credentials: false') 'The only shadow checkout must sparsely materialize the verified synthetic-merge first-parent selector without credentials.'
 $FetchPosition = $ShadowSelection.IndexOf('name: Fetch immutable comparison objects', [StringComparison]::Ordinal)
@@ -322,7 +322,8 @@ Assert-True ($VisualProof -match '(?m)^    needs: ci-selection-shadow\r?$' -and 
 Assert-True ($VisualProof -match '(?m)^    uses: \./\.github/workflows/visual-package-validation\.yml\r?$') 'The additive visual proof must call the repository-owned reusable validator.'
 Assert-True ($VisualProof -match '(?ms)^    with:\r?\n      non_authoritative: true\r?$') 'The selector-called visual proof must be explicitly non-authoritative.'
 Assert-True ($VisualProof -notmatch 'self-hosted|aetheln-engine-runner|runs-on:') 'The called visual proof must not acquire engine-runner authority.'
-Assert-True ($VisualWorkflow -match '(?m)^    timeout-minutes: 20\r?$') 'Visual validation must have an explicit hosted-runner bound.'
+Assert-True ($VisualWorkflow -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $VisualWorkflow -notmatch 'aetheln-engine|concurrency:') 'Visual validation must run on the aetheln-checks runners, never the engine runner or its queue.'
+Assert-True ($VisualWorkflow -match '(?m)^    timeout-minutes: 20\r?$') 'Visual validation must have an explicit runner bound.'
 Assert-True ($VisualWorkflow -match 'Invoke-VisualPackageValidation\.ps1' -and $VisualEvidenceRunner -match 'aetheln\.visual-package-report/v1' -and $VisualWorkflow -match 'visual-package-report-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}') 'Visual validation must preserve attempt-specific machine-readable raw evidence.'
 Assert-True ($VisualWorkflow -match 'path: \$\{\{ runner\.temp \}\}/aetheln-visual-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/visual-package-report\.json') 'Visual evidence upload must name one exact bounded report file.'
 foreach ($Bound in @(
@@ -1206,7 +1207,7 @@ try {
 	Remove-Item -LiteralPath $DryRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Package 3C receipt publishers are additive PR-only hosted jobs. Each consumes
+# Package 3C receipt publishers are additive PR-only check-runner jobs. Each consumes
 # the selector and exactly one raw producer through immutable artifact IDs,
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
@@ -1238,7 +1239,7 @@ Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_CONTENT_REQUIRED: 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
 	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?\n(?=    if: )" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
-	Assert-True ($Body -match '(?m)^    runs-on: windows-latest\r?$' -and $Body -match '(?m)^    timeout-minutes: 10\r?$' -and $Body -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Name) must be a bounded hosted publisher without engine admission."
+	Assert-True ($Body -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $Body -match '(?m)^    timeout-minutes: 10\r?$' -and $Body -notmatch 'aetheln-engine|concurrency:') "$($Receipt.Name) must be a bounded check-runner publisher without engine admission."
 	foreach ($Output in @('artifact_id: \$\{\{ steps\.receipt_artifact\.outputs\.artifact-id \}\}', 'artifact_name: \$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}', 'artifact_digest: sha256:\$\{\{ steps\.receipt_artifact\.outputs\.artifact-digest \}\}')) {
 		Assert-True ($Body -match "(?m)^      $Output\r?$") "$($Receipt.Name) must expose the reviewed direct receipt upload binding."
 	}
@@ -1379,7 +1380,7 @@ Assert-True ($ReconcileEventExitIndex -ge 0 -and $ReconcileBindingsStartIndex -g
 Assert-True ($ReconcileStep.Contains('aetheln.ci-acceptance-shadow-gap/v3') -and $ReconcileStep.Contains('liveBindings') -and -not $ReconcileStep.Contains('shadow-gap/v2')) 'The gap record must be the v3 schema carrying liveBindings.'
 Assert-True ($AcceptanceShadow -notmatch 'acceptanceGranted|grantsAcceptance = \$true|authoritative = \$true' -and $AcceptanceShadow -notmatch '(?m)^\s+continue-on-error:') 'Package 3C must neither advertise nor grant authority and unexpected failures must remain red.'
 Assert-True ($AcceptanceShadow -match '(?m)^        id: acceptance_artifact\r?$' -and $AcceptanceShadow -notmatch '(?ms)^      - name: Upload shadow acceptance diagnostic\r?\n        id: acceptance_artifact\r?\n        if: always\(\)') 'The shadow aggregate must upload only a successfully reconciled report, never mask a failed reconciliation with always().'
-Assert-True ($AcceptanceAuthority -match "(?m)^    needs: ci-acceptance-shadow\r?\n    if: always\(\) && github\.event_name == 'pull_request' && false\r?$" -and $AcceptanceAuthority -match '(?m)^    runs-on: windows-latest\r?$' -and $AcceptanceAuthority -match '(?m)^    timeout-minutes: 5\r?$') 'The future authority boundary must remain literally unreachable, evaluate dependency failures when activated, and stay bounded on a hosted runner.'
+Assert-True ($AcceptanceAuthority -match "(?m)^    needs: ci-acceptance-shadow\r?\n    if: always\(\) && github\.event_name == 'pull_request' && false\r?$" -and $AcceptanceAuthority -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $AcceptanceAuthority -match '(?m)^    timeout-minutes: 5\r?$') 'The future authority boundary must remain literally unreachable, evaluate dependency failures when activated, and stay bounded on the aetheln-checks runners.'
 Assert-True ($AcceptanceAuthority -match '(?ms)^    permissions:\r?\n      actions: read\r?\n      contents: read\r?$' -and $AcceptanceAuthority -notmatch '(?m)^      [a-z-]+: write\r?$') 'The dormant authority boundary must remain read-only even while unreachable.'
 Assert-True ($AcceptanceAuthority -match 'AETHELN_AGGREGATE_RESULT: \$\{\{ needs\.ci-acceptance-shadow\.result \}\}' -and $AcceptanceAuthority -match "throw 'acceptance_authority_dependency_invalid'" -and $AcceptanceAuthority -match 'artifact-ids: \$\{\{ needs\.ci-acceptance-shadow\.outputs\.artifact_id \}\}' -and $AcceptanceAuthority -match 'AETHELN_AGGREGATE_COMPLETE: \$\{\{ needs\.ci-acceptance-shadow\.outputs\.complete \}\}' -and $AcceptanceAuthority -match 'AETHELN_AGGREGATE_REPORT_SHA256: \$\{\{ needs\.ci-acceptance-shadow\.outputs\.report_sha256 \}\}' -and $AcceptanceAuthority -match 'AETHELN_AGGREGATE_REPORT_SIZE_BYTES: \$\{\{ needs\.ci-acceptance-shadow\.outputs\.report_size_bytes \}\}' -and $AcceptanceAuthority -match "throw 'acceptance_authority_evidence_mismatch'") 'The dormant boundary must fail on a failed or cancelled aggregate and may consume only directly bound complete evidence whose exact report bytes match upstream SHA-256 and length outputs.'
 $AuthorityGuardMatch = [regex]::Match($AcceptanceAuthority, '(?ms)^      - name: Require successful reconciled aggregate dependency\r?\n.*?^        run: \|\r?\n(?<script>(?:^          [^\r\n]*\r?\n?)+)')
@@ -1402,19 +1403,25 @@ finally {
 }
 Assert-True ($Workflow.Substring(0, $AuthorityStart) -notmatch 'ci-acceptance-authority' -and $Workflow.IndexOf('  ci-acceptance-authority:', $AuthorityStart + 1, [StringComparison]::Ordinal) -lt 0) 'No live job may depend on or otherwise reference the hard-disabled authority boundary.'
 
-# Portable job: GitHub-hosted, explicitly bounded, StarterMap-only LFS.
-Assert-True ($QualityGates -match '(?m)^\s+runs-on: windows-latest\r?$') 'The portable job must stay on the GitHub-hosted Windows runner.'
+# Portable job: aetheln-checks runners (issue #376), explicitly bounded,
+# StarterMap-only LFS. It joins the engine FIFO queue so the suite never runs
+# beside a compile on the same PC, and it clears the persisted TestResults/
+# folder before the suite writes a fresh report.
+Assert-True ($QualityGates -match '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $QualityGates -notmatch '(?m)^\s+runs-on: .*aetheln-engine') 'The portable job must run on the aetheln-checks runners, never the engine runner.'
+Assert-True ($QualityGates -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$') 'The portable job must join the shared FIFO, non-cancelling engine-runner queue.'
+$QualityGatesClean = $QualityGates.IndexOf("Remove-Item -LiteralPath 'TestResults' -Recurse -Force", [StringComparison]::Ordinal)
+Assert-True ($QualityGatesClean -ge 0 -and $QualityGatesClean -lt $QualityGates.IndexOf('name: Run CI suite', [StringComparison]::Ordinal)) 'The portable job must remove a persisted TestResults folder before the suite runs.'
 Assert-True ($QualityGates -match '(?m)^\s+timeout-minutes: 40\r?$') 'The portable job must declare an explicit conservative bound.'
 Assert-True ($QualityGates -notmatch '(?m)^\s+needs:') 'The portable job must not depend on any engine or classifier job.'
 Assert-True ($QualityGates -match 'git lfs pull --include "Content/Maps/StarterMap\.umap"') 'The portable job must materialize the StarterMap LFS fixture.'
 
-# Change-impact classifier: GitHub-hosted, pull requests only, checkout plus
+# Change-impact classifier: aetheln-checks runners, pull requests only, checkout plus
 # repository-owned PowerShell, exact SHAs passed through env (no expression
 # injection into the script body), stable engine_required output.
 Assert-True ($ChangeImpact -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'The classifier must run only for pull requests.'
-Assert-True ($ChangeImpact -match '(?m)^\s+runs-on: windows-latest\r?$') 'The classifier must run on the GitHub-hosted Windows runner, never the engine runner.'
+Assert-True ($ChangeImpact -match '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$') 'The classifier must run on the aetheln-checks runners, never the engine runner.'
 Assert-True ($ChangeImpact -match '(?m)^\s+timeout-minutes: 10\r?$') 'The classifier must declare an explicit short bound.'
-Assert-True ($ChangeImpact -notmatch 'self-hosted' -and $ChangeImpact -notmatch 'aetheln-engine') 'The classifier must never touch the engine runner or its concurrency group.'
+Assert-True ($ChangeImpact -notmatch 'aetheln-engine' -and $ChangeImpact -notmatch 'concurrency:') 'The classifier must never touch the engine runner or its concurrency group.'
 Assert-MatchCount -Text $ChangeImpact -Pattern '(?m)^\s+-?\s*uses: ' -Expected 1 -Message 'The classifier must use exactly one action.'
 Assert-True ($ChangeImpact -match "(?m)^\s+- uses: $CheckoutActionPattern\r?$") 'The classifier''s only action must be the reviewed checkout SHA.'
 Assert-True ($ChangeImpact -match '(?m)^\s+engine_required: \$\{\{ steps\.classify\.outputs\.engine_required \}\}\r?$') 'The classifier must publish engine_required as a job output.'
@@ -1434,8 +1441,9 @@ finally { $LegacyHasher.Dispose() }
 # TA-025 (2026-10-12) added the content launcher to that set (7,488 bytes, 5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d).
 # The issue #299 follow-up added .agents/** and tests/build/** to the portable-only set (7,617 bytes, 19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2).
 # Issue #299 PR 4 (2026-10-13) diffs the head against its merge base with the base SHA (7,611 bytes, 3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2).
-# Issue #231 (2026-10-13) added design/** and scripts/design/** to the portable-only set; this is the reviewed block identity after that change.
-Assert-True ($LegacyBytes.Length -eq 7683 -and $LegacyDigest -ceq 'd8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7') 'The change-impact block must match the reviewed issue #231 design-path identity after LF normalization.'
+# Issue #231 (2026-10-13) added design/** and scripts/design/** to the portable-only set (7,683 bytes, d8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7).
+# Issue #376 (2026-10-17) moved the job to the aetheln-checks runners (runs-on line and its comment only); this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 7712 -and $LegacyDigest -ceq '3e03db1e535b620db1aac3bcf8b9f95105871481cc22fb1c70d301d1be3e347f') 'The change-impact block must match the reviewed issue #376 check-runner identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -1844,6 +1852,6 @@ Write-Output 'PASS: workflow exposes no manual entry point, gates trusted compil
 Write-Output 'PASS: classifier skips compile only for the closed portable set and fails closed on every uncertainty'
 Write-Output 'PASS: milestone checkouts fetch complete ancestry; fixture proves shallow DDC root drift and full-ancestry stability across consecutive revisions'
 Write-Output 'PASS: workflow preserves LFS, serialization, report-only upload, and no-secret policy'
-Write-Output 'PASS: Package 3C selector, direct artifact bindings, receipt publishers, shadow aggregate, and hard-disabled authority boundary remain hosted, bounded, pinned, and non-authoritative'
+Write-Output 'PASS: Package 3C selector, direct artifact bindings, receipt publishers, shadow aggregate, and hard-disabled authority boundary remain on the check runners, bounded, pinned, and non-authoritative'
 Write-Output 'PASS: the CI editor build passes -NoEngineChanges, and the issue #267 cold dry run passes only a fresh build that leaves every closure file unchanged'
 exit 0

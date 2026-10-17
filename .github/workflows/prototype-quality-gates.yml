@@ -32,7 +32,7 @@ jobs:
   ci-selection-shadow:
     if: github.event_name == 'pull_request'
     continue-on-error: true
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       accepted_base_sha: ${{ steps.comparison.outputs.accepted_base_sha }}
@@ -353,9 +353,17 @@ jobs:
           path: ${{ runner.temp }}/ci-selection-shadow.json
           if-no-files-found: error
 
+  # Issue #376: the portable suite runs on the owner's PC beside the engine
+  # runner, so it joins the engine FIFO queue and never overlaps a compile.
+  # The runner workspace persists between runs, so TestResults/ is removed
+  # before the suite writes a fresh report.
   quality-gates:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 40
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
     outputs:
       report_artifact_id: ${{ steps.report_artifact.outputs.artifact-id }}
       report_artifact_name: ${{ steps.report_identity.outputs.artifact_name }}
@@ -369,6 +377,9 @@ jobs:
       - name: Fetch StarterMap LFS object
         shell: powershell
         run: git lfs pull --include "Content/Maps/StarterMap.umap"
+      - name: Remove persisted test results
+        shell: powershell
+        run: if (Test-Path -LiteralPath 'TestResults') { Remove-Item -LiteralPath 'TestResults' -Recurse -Force }
       - name: Run CI suite
         shell: powershell
         run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1
@@ -395,7 +406,7 @@ jobs:
           path: TestResults/ci-report.json
           if-no-files-found: error
 
-  # Issue #150 pull-request change-impact classifier. GitHub-hosted, checkout
+  # Issue #150 pull-request change-impact classifier. aetheln-checks runners, checkout
   # plus repository-owned PowerShell only. It diffs the exact pull-request
   # head SHA against its merge base with the base SHA (both passed through
   # env, never interpolated into the script; issue #299) and skips trusted
@@ -406,7 +417,7 @@ jobs:
   # step always exits 0 so the decision is always published.
   change-impact:
     if: github.event_name == 'pull_request'
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       engine_required: ${{ steps.classify.outputs.engine_required }}
@@ -1624,7 +1635,7 @@ jobs:
       - ci-selection-shadow
       - quality-gates
     if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.portable_required == 'true'
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
@@ -1714,7 +1725,7 @@ jobs:
       - ci-selection-shadow
       - trusted-content-validation
     if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.content_reference_validation_required == 'true'
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
@@ -1809,7 +1820,7 @@ jobs:
       - ci-selection-shadow
       - trusted-candidate-compile
     if: github.event_name == 'pull_request' && (needs.ci-selection-shadow.outputs.native_client_server_compile_required == 'true' || needs.ci-selection-shadow.outputs.controller_operational_proof_required == 'true')
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
@@ -1899,7 +1910,7 @@ jobs:
       - ci-selection-shadow
       - trusted-editor-automation
     if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.unreal_editor_automation_required == 'true'
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
@@ -1994,7 +2005,7 @@ jobs:
       - ci-selection-shadow
       - visual-proof
     if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.visual_package_required == 'true'
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
@@ -2107,7 +2118,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 10
     outputs:
       complete: ${{ steps.reconcile.outputs.complete }}
@@ -2321,7 +2332,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 5
     steps:
       - name: Require successful reconciled aggregate dependency

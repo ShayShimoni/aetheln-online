@@ -147,9 +147,9 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `release-packaging-tests` (`tests/ci/Invoke-ReleasePackaging.Tests.ps1`) | Required | Offline fixtures for the release guard and evidence modes: case-sensitive event, repository, actor, attempt, ref, run-number, and `ProjectVersion` refusals; provenance, network-version, and smoke-evidence binding; a closed, create-only, path-free record; and output limited to one reason code. |
 | `unreal-automation-tests` (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) | Required | Portable fixture regression tests for the headless Unreal runner's engine pin, discovery, repository-state, timeout, report validation, and fail-closed exit behavior. |
 | `board-integrity-tests` (`tests/delivery/Test-BoardIntegrity.Tests.ps1`) | Required | Offline snapshot fixtures for every board integrity rule, the violation format, the summary count, and `-Json` output. They never contact GitHub. |
-| `pull-request-policy-tests` (`tests/delivery/Test-PullRequestPolicy.Tests.ps1`) | Required | Base, head-branch, and title rules of the hosted PR policy check, including fork PRs, plus its workflow contract: env-only PR inputs, read-only permissions, a 5-minute bound, and the pinned checkout. |
+| `pull-request-policy-tests` (`tests/delivery/Test-PullRequestPolicy.Tests.ps1`) | Required | Base, head-branch, and title rules of the PR policy check, including fork PRs, plus its workflow contract: env-only PR inputs, read-only permissions, a 5-minute bound, and the pinned checkout. |
 | `release-cut-tests` (`tests/delivery/Invoke-ReleaseCut.Tests.ps1`) | Required | Offline snapshot, log, and provenance fixtures for every `Invoke-ReleaseCut.ps1` failure code in the `Verify` and `VerifyPackage` stages, the `<code> <subject> <detail>` format, exit codes 0, 1, and 2 (usage and environment errors, which print no local path), the `ProjectVersion` consumer record, and `-Json` output. They never contact GitHub or a git remote. |
-| `psscriptanalyzer` (`Invoke-ScriptAnalyzer` 1.25.0 over `scripts/` and `tests/`) | Advisory | PowerShell static analysis pinned to the hosted image's exact 1.25.0 module. Contributor machines without that exact version report `skipped`; Package 3C portable acceptance nevertheless requires the hosted report to record this check as `passed`, so a hosted analyzer failure or version skip cannot produce a portable receipt. |
+| `psscriptanalyzer` (`Invoke-ScriptAnalyzer` 1.25.0 over `scripts/` and `tests/`) | Advisory | PowerShell static analysis pinned to the exact 1.25.0 module, which is installed for the runner user on the `aetheln-checks` runners (issue #376). Contributor machines without that exact version report `skipped`; Package 3C portable acceptance nevertheless requires the `quality-gates` report to record this check as `passed`, so an analyzer failure or a version skip on a check runner cannot produce a portable receipt. |
 
 Required checks fail the suite and the workflow. Ordinary advisory-check
 failures are reported in the same machine-readable evidence without failing
@@ -162,14 +162,14 @@ substitute for an exact-revision Editor scan or real client/server cook evidence
 
 `.github/workflows/delivery-policy.yml` runs the `pull-request-policy` job
 for pull requests to `develop` and `main`, including title edits, on
-GitHub-hosted `windows-latest` with `contents: read` and a 5-minute bound. It
+the `aetheln-checks` runners with `contents: read` and a 5-minute bound. It
 passes the base ref, head ref, head and base repositories, and title to
 `scripts/ci/Test-PullRequestPolicy.ps1` through environment variables only, so
 the release, hotfix, and back-merge allowances apply only to heads in this
 repository and never to fork PRs. The rules are listed in
 [Rule enforcement](delivery-workflow.md#rule-enforcement). The board
 integrity check itself needs project access, so it runs locally, not in
-hosted CI.
+CI.
 
 The suite deliberately excludes `visuals/tests/`, which is owned by the frozen
 `visual-package-validation.yml` workflow described below and only needs to run
@@ -209,19 +209,23 @@ packaging uses the separate workflow described in
 [Release packaging](#release-packaging-issue-226), and owner-requested packaging
 of the `develop` head outside the schedule uses another separate workflow
 described in [Develop packaging dispatch](#develop-packaging-dispatch-issue-267).
-The `quality-gates` job runs the portable suite on every event, on a
-GitHub-hosted `windows-latest` runner bounded at 40 minutes. That job checks
-out without LFS smudge, fetches only the
+The `quality-gates` job runs the portable suite on every event, on the
+`aetheln-checks` runners (see [Runner Constraints](#runner-constraints)),
+bounded at 40 minutes. It joins the `aetheln-engine-runner` concurrency group
+(`queue: max`, `cancel-in-progress: false`), so the suite never runs on the
+owner's PC beside an engine job; across runs it can wait behind another pull
+request's engine jobs. That job checks out without LFS smudge, fetches only the
 `Content/Maps/StarterMap.umap` LFS object required by the source-control policy
-check, runs the local invocation above, and always uploads
+check, removes any `TestResults/` folder a previous run left in the persisted
+runner workspace, runs the local invocation above, and always uploads
 `TestResults/ci-report.json` as the `ci-report` artifact.
 The required `unreal-automation-tests` check exercises portable fixtures and
-does not launch Unreal Engine. The GitHub-hosted portable job does not run the
+does not launch Unreal Engine. The portable job does not run the
 real engine automation tests.
 
-The independent `ci-selection-shadow` job runs only for pull requests on
-GitHub-hosted `windows-latest` and is bounded at 10 minutes. It has no `needs`,
-self-hosted labels, or engine concurrency. Package 3C exposes the accepted-base
+The independent `ci-selection-shadow` job runs only for pull requests on the
+`aetheln-checks` runners and is bounded at 10 minutes. It has no `needs`,
+engine labels, or engine concurrency. Package 3C exposes the accepted-base
 decisions to additive visual proof, the additive `trusted-content-validation`
 producer (TA-025, the first engine job a selector decision starts), truthful
 receipt publishers, and the shadow aggregate only; no existing authoritative
@@ -256,8 +260,12 @@ that block was exactly 7,611 UTF-8 bytes with SHA-256
 `3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`. Issue #231
 (2026-10-13) then added `design/**` and `scripts/design/**` to the portable-only
 set (see the remaining-classes paragraphs of the selector section);
-the current normalized block is exactly 7,683 UTF-8 bytes with SHA-256
-`d8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7`.
+that block was exactly 7,683 UTF-8 bytes with SHA-256
+`d8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7`. Issue
+#376 (2026-10-17) then moved the job to the `aetheln-checks` runners (its
+`runs-on` line and comment only); the current normalized block is exactly
+7,712 UTF-8 bytes with SHA-256
+`3e03db1e535b620db1aac3bcf8b9f95105871481cc22fb1c70d301d1be3e347f`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -267,7 +275,7 @@ self-hosted runner. Phases 2 to 4 chain through phase 1.
 
 ### Pull-request change-impact classifier
 
-The `change-impact` job (GitHub-hosted `windows-latest`, `pull_request` only,
+The `change-impact` job (`aetheln-checks` runners, `pull_request` only,
 bounded at 10 minutes) decides whether a pull request needs trusted Unreal
 compilation. It uses the reviewed
 `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`
@@ -458,7 +466,7 @@ diff runs from that first parent to the tested synthetic merge
 whole-tree attribute re-evaluation read the merge. A head behind its target is
 therefore classified by what the merge changes, not by the upstream changes it
 lacks. Windows checkout safety is checked on the base, head and merge trees,
-because hosted jobs check out the merge; a collision only the merge creates
+because pull-request jobs check out the merge; a collision only the merge creates
 fails closed to the conservative all-selected report.
 Missing ancestry or any conflicting parent/controller identity fails closed.
 The closed output roots are `schemaVersion`, `attemptAnchor`,
@@ -711,7 +719,7 @@ contract is:
 | `unreal-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-editor-automation` | Runs only when `unreal-editor-automation` is selected and the editor automation job succeeds. If any automation step failed or was skipped, that job exposes no automation artifact, the evidence download is skipped, and this job prints the fixed `unreal_automation_outcome reason=<reason>` line from its `automation_reason` output, then fails red at `unreal_raw_artifact_binding_invalid`. | Apply the same direct binding and truthful publication contract to the exact `unreal-automation-report` artifact, publishing `unreal-editor-automation` bound to the one raw `unreal-automation-report.json` with native exit `0` and no cleanup claim. The report proves the tested revision ran the `^Aetheln.` filter on the pinned engine, discovered exactly the `Aetheln.` tests that its `Source/` declares, and every one passed without warnings or errors (issue #237). Runner identity is covered through the native receipt, which the selector always co-selects with this obligation. |
 | `content-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-content-validation` | Runs only when `content-reference-validation` is selected and the content validation job succeeds. If any content step failed or was skipped, that job exposes no content artifact, the evidence download is skipped, and this job prints the fixed `content_validation_outcome reason=<reason>` line from its `content_reason` output, then fails red at `content_raw_artifact_binding_invalid`. | Apply the same direct binding and truthful publication contract to the exact `content-validation-report` artifact, publishing `content-reference-validation` bound to the one raw `content-validation-report.json` with native exit `0` and no cleanup claim. The receipt claims only report integrity and the six `reference_boundary` checks (TA-025): the tested revision, the pinned engine, a clean repository, the live Asset Registry, no deterministic error, and every asset's six reference checks applicable and passed. It is never content approval. |
 | `visual-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `visual-proof` | Runs only when visual validation is selected and succeeds. | Apply the same direct binding and truthful publication contract to the exact bounded visual report. |
-| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/unreal/visual/content supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, validate the direct bindings of every selected live producer (a failed or skipped required receipt stays red), then publish the explicit green `producer_contract_incomplete` no-acceptance gap (`aetheln.ci-acceptance-shadow-gap/v3`, carrying `liveBindings`). Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
+| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | `aetheln-checks` runners, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/unreal/visual/content supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, validate the direct bindings of every selected live producer (a failed or skipped required receipt stays red), then publish the explicit green `producer_contract_incomplete` no-acceptance gap (`aetheln.ci-acceptance-shadow-gap/v3`, carrying `liveBindings`). Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
 | `ci-acceptance-authority` | `pull_request` | `ci-acceptance-shadow` | Hard-skipped by the literal `always() && github.event_name == 'pull_request' && false`; job-scoped `actions: read` is dormant. | Reserved activation boundary: when later enabled, it still runs after a failed or cancelled aggregate and fails unless `needs.ci-acceptance-shadow.result` is exactly `success`; only a complete, nonce-bound reconciled shadow aggregate could produce an authority receipt. It grants nothing in the live Package 3C workflow. |
 | `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | A first step (issue #299) checks that the event head is still the pull request's current head and skips every later step when it is not (see [Superseded-head check](#superseded-head-check-issue-299)). Incrementally compile the supported Windows client and Linux server targets without packaging. A final cleanup step (1 minute, runs after any earlier failure or cancellation, continues on error) removes this job's `compile-control-<run>-<attempt>` checkout and every earlier compile or editor control checkout in the runner workspace (issue #243); see Engine-Dependent Gates for its guards. |
 | `trusted-editor-automation` | `pull_request` | `trusted-candidate-compile`, `change-impact` | Runs only after a successful compile (so it is skipped, not failed, whenever the compile is skipped or fails) and only when `change-impact` published `editor_required == 'true'` (issue #299; a controller-only pull request compiles but skips it), under the same owner, same-repository, and triggering-actor predicates; 46-minute job ceiling (step bounds 5 + 20 + 12 + 2 + 1 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-020 and its 2026-10-03 workspace re-sync (issue #236) and 2026-10-12 all-tests (issue #237) amendments. | A first step (issue #299) runs the same superseded-head check as the compile job; a superseded head skips the checkout and every step that depends on it, and the outcome step then publishes the fixed reason `superseded_head`. Check out a fresh exact-revision control source at `github.sha` into `editor-control-<run>-<attempt>` with the compile job's inputs (no persisted credentials, no LFS; 5 minutes). Then, in one step (20 minutes), take the engine host lease and re-sync the registered managed compile workspace to this revision through `Sync-ManagedCompileWorkspace`, as `Invoke-EngineRunnerGate.ps1` does: the control-checkout copy of `scripts/ci/Sync-EditorAutomationWorkspace.ps1` validates the registration, synchronizes, and then asserts the exact revision and a clean workspace (`editor_workspace_revision_changed`, `editor_workspace_dirty`, or `editor_workspace_query_failed` otherwise). Build the `AethelnOnlineEditor` Win64 target there through the control-checkout copy of `InitialPreparation.BuildInvocation.ps1` (runner-local `build.log`) with the contributor compiler selection (no `-Compiler=`, the same `-CompilerVersion` and `-WindowsSDKVersion` pins), so the source-code-access plugin no longer flips between CI and contributor builds. Lease wait, sync, and build share one 17-minute deadline inside the 20-minute step. The sync and the build each run in an owned kill-on-close Job Object that stops at that deadline, and the step releases the lease only after each job is proven empty; nothing is stopped by name. An unproven cleanup or a failed release keeps the held journal for explicit recovery, as the compile does, and records `editor_host_lease_release_failed`. A lease that cannot be taken, including a lease wait that reaches the deadline, records `editor_host_lease_failed`. Fewer than 5 minutes left after the lease is taken (a provisional fixed minimum, not a tuning result) records `editor_sync_time_insufficient` before any checkout starts, because a checkout cut off by the deadline can leave the workspace half-updated (see Retained Compile workspace). A refused sync, or a sync that times out, records `editor_workspace_sync_failed`; a sync timeout carries no detail code. Only a build that reaches the deadline records `editor_build_timeout`, and a failed control checkout records `editor_control_checkout_failed`. A fixture may shorten, never extend, the deadline through `AETHELN_EDITOR_TEST_DEADLINE_SECONDS`, and may lower the minimum through `AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS` only while that deadline override is also set; the step then prints one fixed `editor_test_override active` line. Both variables come from the step's process environment, so a host-level variable on the runner would be honored too, visibly through that line; the lease or sync module's own fixed code is printed as one `editor_build_detail code=<code>` line. The build passes `-NoEngineChanges` (TA-020 2026-10-06 amendment, issue #267): if an outdated action would rewrite an existing file under `Engine/`, UBT exits 5 before it runs and the step records `editor_build_engine_changes_required`; the refused engine file list stays in the runner-local `build.log`, and an executed fixture pins both the flag and the mapping. So a CI editor run no longer relinks an engine module or rewrites the engine editor BuildId; UHT and makefile outputs under `Engine/Intermediate`, and new engine files, may still be written. Before it starts `Build.bat`, the wrapper deletes the target's `Intermediate/Build/<platform>/x64/<target>/Development/Makefile.bin` in the managed workspace (TA-020 2026-10-11 amendment, issue #167): UBT turns the UHT input cache on only while it creates a makefile, and a cache-off UHT run can rewrite the engine's `NetCore.init.gen.cpp`, after which every `-NoEngineChanges` build exits 5 until that file is restored. The wrapper applies the same deletion to its other targets: the Win64 `AethelnOnlineClient` build and the Linux `AethelnOnlineServer` build at `Intermediate/Build/Linux/x64/AethelnOnlineServer/Development/Makefile.bin`. The pinned UBT source gives Linux the same `x64` folder as Win64 (TA-020 2026-10-11 amendment), but that is confirmed from source only, not on a runner tree. A pull request that needs an engine rebuild (for example a new engine plugin in `AethelnOnline.uproject`) stays red with that reason until the owner runs an authorized engine build and re-attests the host tools. Every other build failure records `editor_build_failed`. Then run the harness from that workspace over every declared `Aetheln.` test (issue #237) with its 600-second bound (12 minutes), remove the untracked compile-input files the next managed sync would reject (the exact `ls-files --others` query and git flags of `ManagedCompileWorkspace.ps1`; 2 minutes; runs only on positive evidence that the lease was released or never needed: the editor step succeeded, or failed with a recorded reason other than `editor_host_lease_failed` or `editor_host_lease_release_failed`; it is skipped after those two reasons, after a skipped editor step, and after an interrupted one with no recorded reason, because the lease state is then unknown or held by someone else, and the journal and workspace stay as recovery evidence), bind (1 minute) and upload (1 minute) the normalized `unreal-automation-report` artifact only when every earlier step succeeded, and publish the first failure as the fixed-vocabulary `automation_reason` output (1 minute). A final cleanup step (1 minute, issue #243) then removes this job's `editor-control-<run>-<attempt>` checkout and every earlier compile or editor control checkout, on the same evidence as the residue cleanup (it also runs after a later failed or cancelled step, and is skipped after `editor_host_lease_failed`, `editor_host_lease_release_failed`, a skipped editor step, or an interrupted one with no recorded reason); its result never changes `automation_reason`. Every step continues on error. This job is separate from the compile, so nothing in it can fail the compile job or skip the native receipt. `build.log`, harness output, and the copied report live under the runner temp directory, which the runner wipes after the job; only fixed failure-class and summary lines reach the public log, and the editor log stays in its `-abslog` file. The lease covers only the re-sync and build; the harness and residue cleanup still run outside it, serialized by the engine queue. History: before the re-sync, another owner pull request's compile, or a newer push to the same pull request, that entered the engine queue during this pull request's compile window could re-sync the managed workspace before this job started, and the editor build stopped with `editor_workspace_revision_changed` (PR #227 and PR #232 on 2026-10-03); recovery then took a full re-run of the workflow. |
@@ -1097,7 +1105,7 @@ group stays `cancel-in-progress: false` and the job simply finishes early.
 The step receives the per-run `github.token` through `env` and reads the
 pull-request number and event head from the runner's event payload file
 (`GITHUB_EVENT_PATH`), so no event data is interpolated into an engine job, as
-`tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` requires for every self-hosted
+`tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` requires for every engine-runner
 job. It uses `Invoke-RestMethod` (no new action) and makes one read-only
 request with a 20-second timeout. The workflow
 permissions stay `contents: read`. A superseded compile exposes no report
@@ -1208,7 +1216,7 @@ the retired single-job gate.
   chained, or comment trigger, so pull-request and fork events cannot start it.
   The version is never an input: it is the `ProjectVersion` committed in
   `Config/DefaultGame.ini` at the dispatched commit.
-- **Guard.** `release-gates` runs on GitHub-hosted `windows-latest` with a
+- **Guard.** `release-gates` runs on the `aetheln-checks` runners with a
   30-minute bound and no job condition, so a refused dispatch is a visible red
   check, not an all-skipped run. Its first step after checkout runs
   `scripts/ci/Invoke-ReleasePackaging.ps1 -Mode Guard` as the only command. It
@@ -1336,7 +1344,7 @@ never be selected.
   process, not by the workflow.
 - **Trigger.** `workflow_dispatch` only, with no inputs. There is no
   pull-request, push, schedule, chained, or comment trigger.
-- **Guard.** `develop-gates` runs on GitHub-hosted `windows-latest` with a
+- **Guard.** `develop-gates` runs on the `aetheln-checks` runners with a
   30-minute bound and no job condition, so a refused dispatch is a visible red
   check. Its first step after checkout runs
   `scripts/ci/Invoke-ReleasePackaging.ps1 -Mode DevelopGuard` as the only
@@ -1402,12 +1410,34 @@ never be selected.
 
 ## Runner Constraints
 
-- Portable checks and the pull-request change-impact classifier use
-  GitHub-hosted `windows-latest` with explicit job bounds (30 and 10 minutes);
-  engine jobs require the repository-scoped self-hosted runner on the current
-  Windows development PC, running under the current owner account.
+- No job uses a GitHub-hosted runner (issue #376, TA-012 amendment of
+  2026-10-17). Every job runs on a repository-scoped self-hosted runner on the
+  owner's Windows development PC.
+- Engine jobs require runner 21 (`aetheln-engine-pc`, labels
+  `[self-hosted, Windows, X64, aetheln-engine]`), running under the current
+  owner account. Only engine jobs carry the `aetheln-engine` label.
+- Every other job runs on the two check runners, runner 22
+  (`aetheln-checks-1`) and runner 23 (`aetheln-checks-2`), labels
+  `[self-hosted, Windows, X64, aetheln-checks]`, each running one job at a
+  time: in `prototype-quality-gates.yml`
+  `ci-selection-shadow`, `quality-gates`, `change-impact`, the five receipt
+  publishers, `ci-acceptance-shadow`, and the dormant
+  `ci-acceptance-authority`; `pull-request-policy`; the visual `validate`
+  job; and the `develop-gates` and `release-gates` guard jobs. `quality-gates`
+  joins the `aetheln-engine-runner` concurrency group (`queue: max`,
+  `cancel-in-progress: false`) so the suite never runs beside an engine job;
+  the other check jobs take seconds to a few minutes, join no concurrency
+  group, and run in parallel on the second check runner. The workspace
+  persists between runs: `actions/checkout` cleans the tracked tree, and the
+  suite jobs also remove `TestResults/` before they run; every other output
+  goes under the runner temp directory, which the runner empties for each job.
+- Check-runner prerequisites: Windows PowerShell 5.1, Git with Git LFS, Node,
+  and PSScriptAnalyzer exactly 1.25.0 installed for the runner user. The suite
+  imports exactly that version; without it the `psscriptanalyzer` check
+  reports `skipped` and portable acceptance fails. Pester and PowerShell 7 are
+  not needed.
 - All CI scripts target Windows PowerShell 5.1 as the compatibility floor.
-  `pwsh` (PowerShell 7) is not assumed on hosted runners or contributor
+  `pwsh` (PowerShell 7) is not assumed on CI runners or contributor
   machines.
 - The owner must provision the pinned Unreal Engine 5.8.1 source build, Visual
   Studio toolchain, Windows SDK, Linux cross-toolchain, WSL distribution
@@ -1445,7 +1475,7 @@ self-hosted Windows topology because that machine owns the pinned source engine
 and toolchain. A workflow integration must pass the local non-secret engine
 path explicitly and preserve the existing owner/trust predicates, serialization,
 revision checks, and clean-workspace enforcement. This document does not claim
-that a GitHub-hosted runner has the engine or that the real automation run is
+that a check runner has the engine or that the real automation run is
 part of the portable job. The live integration is the owner-only
 `trusted-editor-automation` job (TA-020): after a successful
 `trusted-candidate-compile`, it checks out its own exact-revision control
@@ -2023,7 +2053,7 @@ incremental compile policy.
   identity compared against the report is the self-hosted
   `trusted-candidate-compile` job's `runner_name`, which the aggregate resolves
   from the attempt jobs and validates (success, interval, exact labels) before
-  it accepts the hosted `native-receipt-shadow` publisher's receipt;
+  it accepts the `native-receipt-shadow` publisher's receipt;
   `controller-operational-proof` revalidates that same exact
   `engine-runner-report.json` under its own check id (reasons
   `receipt_semantic_evidence_invalid|failure:controller-operational-proof`)
@@ -2031,12 +2061,12 @@ incremental compile policy.
   obligations validates the one report once per result; and
   `visual-package` revalidates the exact bounded
   `aetheln.visual-package-report/v1`; and `unreal-editor-automation`
-  revalidates the exact `aetheln.unreal-automation` report from the hosted
+  revalidates the exact `aetheln.unreal-automation` report from the
   `unreal-receipt-shadow` publisher (tested revision, pinned engine commit,
   the `^Aetheln.` filter, one to 1024 unique `Aetheln.` tests that all pass,
   clean repository after the run, native exit `0`, no cleanup claim); and `content-reference-validation`
   revalidates the exact `aetheln.content-validation-report` version-2 report
-  from the hosted `content-receipt-shadow` publisher under the TA-025 claim
+  from the `content-receipt-shadow` publisher under the TA-025 claim
   boundary (tested revision, pinned engine, clean repository, live Asset
   Registry, no deterministic error, every asset's six `reference_boundary`
   checks applicable and passed, native exit `0`, no cleanup claim).
@@ -2188,7 +2218,7 @@ shadow-only and cannot grant acceptance.
 schema, publisher, direct artifact binding, and validators are wired together. An opaque digest or
 successful summary cannot substitute.
 
-`aetheln.ci-acceptance-aggregate/v1` is the live hosted shadow reconciliation
+`aetheln.ci-acceptance-aggregate/v1` is the live shadow reconciliation
 record for a selector whose selected obligations are all in the supported
 portable/controller-contract/controller-operational-proof/native/unreal/visual/content subset. It does not trust caller-supplied job-selection
 booleans. Instead, it requires the exact successful current-attempt

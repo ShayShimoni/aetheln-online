@@ -6,7 +6,7 @@ name: Develop packaging
 # refs/heads/develop in this repository on attempt 1 (OD-7, OD-8), then runs
 # the portable suite. The four engine jobs copy the scheduled phases (same gate,
 # modes, bounds, handoff, artifact names, and FIFO concurrency group) and repeat
-# the trust predicate, so GitHub never hands a refused run to the self-hosted
+# the trust predicate, so GitHub never hands a refused run to the engine
 # runner. Only five redacted reports are uploaded; packaged bytes stay on the
 # runner host. prototype-quality-gates.yml keeps no manual trigger (TA-012).
 on:
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   develop-gates:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -31,6 +31,9 @@ jobs:
       - name: Fetch StarterMap LFS object
         shell: powershell
         run: git lfs pull --include "Content/Maps/StarterMap.umap"
+      - name: Remove persisted test results
+        shell: powershell
+        run: if (Test-Path -LiteralPath 'TestResults') { Remove-Item -LiteralPath 'TestResults' -Recurse -Force }
       - name: Run CI suite
         id: suite
         shell: powershell
