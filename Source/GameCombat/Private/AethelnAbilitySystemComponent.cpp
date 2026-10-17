@@ -1087,6 +1087,15 @@ void UAethelnAbilitySystemComponent::ServerPrintDebug_RequestWithStrings_Impleme
 	RefuseStockRoute();
 }
 
+void UAethelnAbilitySystemComponent::OnRegister()
+{
+	Super::OnRegister();
+	if (UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline())
+	{
+		Timeline->GetOrAssignCombatId(*this);
+	}
+}
+
 void UAethelnAbilitySystemComponent::OnUnregister()
 {
 	ResetChain(EAethelnChainEndReason::AvatarLost);
