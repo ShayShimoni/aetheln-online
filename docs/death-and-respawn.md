@@ -689,10 +689,11 @@ the other two on PR #359's review of P4b):
   of #21.
 - **Recovery delay through death.** A running delay persists under the current
   default; the decision stays `TBD`.
-- **Production initial attributes are all zero** (`ProvisionalInitialAttributes`,
-  `TBD` until #107). Until they are set, a real server's maximum Health is zero,
-  so a death there stays a death: the respawn refuses and logs, by design (see
-  Respawn, Fail closed).
+- **Production initial attributes are the owner's provisional values**
+  (`ProvisionalInitialAttributes`: Health 40, Endurance 30, Guard 20, [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657),
+  2026-10-17), re-tuned at the feel test. A real server's maximum Health is
+  therefore 40; a server whose maximum Health is zero still refuses the respawn
+  and logs, by design (see Respawn, Fail closed).
 - **Guard break active at death** is covered by R7 (the break effect is removed
   while the death effect is applied, from `HandleDeadDuringBreak`,
   `AethelnBlockAbility.cpp:146`).

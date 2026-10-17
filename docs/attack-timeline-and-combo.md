@@ -977,7 +977,7 @@ The one exception is the basic chain's provisional values. By owner decision D3
 definition asset `/Game/Combat/Attacks/DA_SwordShieldBasicChain` (#84 P4; before P4 they were
 in `[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`),
 marked provisional. They are not tuning, no number was invented, and the #84 P5
-feel test re-tunes them. The chain is grantable but not granted in production.
+feel test re-tunes them. The chain is granted in production (#19), with the owner's provisional player attributes ([#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657), 2026-10-17).
 
 | Config section | Keys |
 | --- | --- |
