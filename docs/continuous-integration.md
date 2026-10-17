@@ -1418,8 +1418,8 @@ never be selected.
   owner account. Only engine jobs carry the `aetheln-engine` label.
 - Every other job runs on the two check runners, runner 22
   (`aetheln-checks-1`) and runner 23 (`aetheln-checks-2`), labels
-  `[self-hosted, Windows, X64, aetheln-checks]`, each a Windows service in its
-  own folder that runs one job at a time: in `prototype-quality-gates.yml`
+  `[self-hosted, Windows, X64, aetheln-checks]`, each running one job at a
+  time: in `prototype-quality-gates.yml`
   `ci-selection-shadow`, `quality-gates`, `change-impact`, the five receipt
   publishers, `ci-acceptance-shadow`, and the dormant
   `ci-acceptance-authority`; `pull-request-policy`; the visual `validate`
