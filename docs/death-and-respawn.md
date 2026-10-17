@@ -255,8 +255,7 @@ plays CQTest's new unsaved map, so its two net GUID cache warnings about that
 map are expected by the test. The test is declared with
 `IMPLEMENT_SIMPLE_AUTOMATION_TEST`, as the CI discovery scan requires, and
 queues the component's latent steps itself. Attribute values are the test
-fixture values (`MakeTestInitValues`), because the ini's initial attributes
-are zero until #107. Client 0 is player A, the victim; client 1 is player B.
+fixture values (`MakeTestInitValues`), which equal the production values. Client 0 is player A, the victim; client 1 is player B.
 
 - `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`: the server kills A
   through the timeline's lethal notification and repeats the notification. A's

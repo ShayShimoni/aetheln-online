@@ -1583,7 +1583,9 @@ All stay `TBD` until the named owner decides.
    the owner dropped on 2026-10-13, so TC-008 needs updating).
 2. **Tuning values:** initial `MaxHealth`, `MaxEndurance`, and `MaxGuard`,
    starting current values, each ability's Endurance cost (or none), and each
-   cooldown duration. Owners: Issue
+   cooldown duration. The player's initial values are set provisionally (owner,
+   [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657), 2026-10-17; re-tuned at the feel
+   test); the AI character's stay open. Owners: Issue
    [#107](https://github.com/ShayShimoni/aetheln-online/issues/107) and the
    evidence tickets (#45).
 3. **Final values** for the PlayerState update frequency and the rate bucket
