@@ -89,7 +89,7 @@ public:
 	UPROPERTY(Config)
 	TArray<TSubclassOf<UGameplayAbility>> GrantedAbilities;
 
-	/** Server-side config: initial attribute values, applied once through UAethelnAttributeInitEffect. TBD (#107, #45). */
+	/** Server-side config: initial attribute values, applied once through UAethelnAttributeInitEffect. The player's are the owner's provisional values (#107 comment 6232938657), re-tuned at the feel test. */
 	UPROPERTY(Config)
 	FAethelnCombatAttributeInitValues ProvisionalInitialAttributes;
 

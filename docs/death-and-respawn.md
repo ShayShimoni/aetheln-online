@@ -255,8 +255,7 @@ plays CQTest's new unsaved map, so its two net GUID cache warnings about that
 map are expected by the test. The test is declared with
 `IMPLEMENT_SIMPLE_AUTOMATION_TEST`, as the CI discovery scan requires, and
 queues the component's latent steps itself. Attribute values are the test
-fixture values (`MakeTestInitValues`), because the ini's initial attributes
-are zero until #107. Client 0 is player A, the victim; client 1 is player B.
+fixture values (`MakeTestInitValues`), which equal the production values. Client 0 is player A, the victim; client 1 is player B.
 
 - `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`: the server kills A
   through the timeline's lethal notification and repeats the notification. A's
@@ -689,10 +688,11 @@ the other two on PR #359's review of P4b):
   of #21.
 - **Recovery delay through death.** A running delay persists under the current
   default; the decision stays `TBD`.
-- **Production initial attributes are all zero** (`ProvisionalInitialAttributes`,
-  `TBD` until #107). Until they are set, a real server's maximum Health is zero,
-  so a death there stays a death: the respawn refuses and logs, by design (see
-  Respawn, Fail closed).
+- **Production initial attributes are the owner's provisional values**
+  (`ProvisionalInitialAttributes`: Health 40, Endurance 30, Guard 20, [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657),
+  2026-10-17), re-tuned at the feel test. A real server's maximum Health is
+  therefore 40; a server whose maximum Health is zero still refuses the respawn
+  and logs, by design (see Respawn, Fail closed).
 - **Guard break active at death** is covered by R7 (the break effect is removed
   while the death effect is applied, from `HandleDeadDuringBreak`,
   `AethelnBlockAbility.cpp:146`).

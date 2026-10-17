@@ -144,7 +144,7 @@ namespace AethelnTwoClientEnemyTests
 			}, Timeout)
 			.ThenServer(TEXT("Give both players fixture attributes and hold them still, B out of the enemy's reach"), [R, Init, VictimInit](FState& Server)
 			{
-				// The ini's provisional player attributes are zero (TBD until #107): an eligible target needs Health.
+				// The ini sets the owner's provisional attributes (#19), equal to the fixture values; applying them keeps this test independent of a later re-tune.
 				for (int32 Index : { VictimClient, ObserverClient })
 				{
 					UAethelnAbilitySystemComponent& AbilitySystem = *ServerAbilitySystem(Server, Index);

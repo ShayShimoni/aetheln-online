@@ -478,8 +478,8 @@ namespace AethelnTwoClientOathscarTests
 }
 
 // K14. Red-first: SubmitAbilityPress routes the id it is given. With a stub that sends the chain's id whatever it is given, the
-// chain is not granted on this server, so the press is refused as ungranted, no record arrives, the drive step "Press the four actives
-// in turn" never completes and times out, and the run fails there ("The record names Instant Strike" is the line that would flip
+// chain is granted on this server (#19), so the first press starts chain step 1 and the second never opens Parry: the drive step "Press
+// the four actives in turn" times out at stage 2 and the run fails there ("The record names Instant Strike" is the line that would flip
 // if it got that far).
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnOathscarActivesTwoClientTest,
 	"Aetheln.GameCombat.Net.OathscarActivesTwoClient",

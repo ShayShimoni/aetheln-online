@@ -557,7 +557,7 @@ The raw logs are in the issue's delivery evidence (`issue-83-p4`).
 | Readable telegraph, wind-up, active, recovery, interruption, death, and reset states without notifies | State machine and replication; E3, E4, E5, E8 |
 | Minimum replication; clients cannot drive AI or contact | [Replication](#replication), [Server-Only Execution](#server-only-execution); E1, E8 |
 | Tests for target loss, unreachable paths, invalid commands, interruption ordering, death and reset, two-player contention, server-only execution | E1-E11 |
-| DoD: one greybox enemy navigates and attacks in the prototype space | On the provisional values: E12 (headless arena) and E13 in P3, and in P4 the enemy, the bounds volume, and the built mesh in `MovementPOC.umap` itself (E14). E14 does not show the enemy moving or attacking in `MovementPOC`; that is a later evidence item. The box stays open until a post-merge QA round on the `develop` revision shows the enemy navigating and attacking there, never because P4 merged. That round needs the #107 player values applied by the issue that owns them, or a recorded fixture method: in a real session the enemy stays Idle until the player initial attributes exist (open decision 10). |
+| DoD: one greybox enemy navigates and attacks in the prototype space | On the provisional values: E12 (headless arena) and E13 in P3, and in P4 the enemy, the bounds volume, and the built mesh in `MovementPOC.umap` itself (E14). E14 does not show the enemy moving or attacking in `MovementPOC`; that is a later evidence item. The box stays open until a post-merge QA round on the `develop` revision shows the enemy navigating and attacking there, never because P4 merged. That round uses the #107 player values, which the production config has applied since #19 (open decision 10); before that, in a real session the enemy stayed Idle. |
 | DoD: focused automation and repeatable multiplayer evidence | E1-E14 |
 | DoD: budgets stay with #45 | Measurements only, P3 |
 
@@ -615,15 +615,12 @@ which the feel test re-tunes.
    `ServerDefaultMap` follows is a separate decision.
 9. **Navigation data in the client cook** (#120).
 10. **Player initial attributes** (#107): decided by the owner as provisional
-    values on
-    [#107](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6176507597)
-    (2026-10-14); this document does not restate them. They are not applied yet:
-    `AAethelnPlayerState` stays at zero in config, and P4 applies nothing because
-    E14 needs no live player. The config change stays with the issue that owns the
-    player attribute defaults. An eligible target needs Health above zero, so until
-    that change lands the enemy placed in `MovementPOC` stands Idle at home and
-    targets no real player. E13 applies fixture values by hand. The interactive
-    two-client run waits on it.
+    values (Health 40, Endurance 30, Guard 20, [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657), 2026-10-17)
+    and applied through `Config/DefaultGame.ini` (#19). P4 itself applied nothing,
+    because E14 needs no live player. An eligible target needs Health above zero,
+    which a real player now has, so the enemy placed in `MovementPOC` can target
+    one. E13 applies fixture values by hand, and they equal the production values.
+    The interactive two-client run no longer waits on it.
 11. **`MovementPOC` audience** (#120): the registry lists the map as
     `client_only`, which was true while it held only client-side course
     geometry. It now carries navigation data and a server-driven enemy, and

@@ -290,8 +290,12 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
 
 - **No meta "incoming damage" attribute.** Damage resolution in the shared
   defense order is #60's.
-- **Initial values are `TBD`.** They reach the set only through the init
-  effect, with set-by-caller values read from `Provisional...` config keys.
+- **Initial values.** They reach the set only through the init
+  effect, with set-by-caller values read from `Provisional...` config keys. The
+  player's are the owner's provisional values (Health 40, Endurance 30, Guard 20,
+  [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657),
+  2026-10-17), set in `Config/DefaultGame.ini` and re-tuned at the feel test; the AI
+  character's stay `TBD` and 0 (#20).
 - **Ordering trap.** Every attribute starts at 0, so every maximum is 0 until
   init runs, and a current value set before its maximum clamps to 0. The init
   effect therefore lists every maximum modifier before any current value (T9).
@@ -575,7 +579,7 @@ Every representative active derives from `UAethelnGameplayAbility`.
   an ability that must have a cooldown (Instant Strike, K1) a zero cooldown
   fails grant. Automation tests set their own values on fixture subclasses.
   `AAethelnPlayerState` grants the abilities listed in its own `+GrantedAbilities`
-  entries, none of the #260 actives until their values exist.
+  entries: the basic chain (#19, provisional), none of the #260 actives until their values exist.
 - **`State.Dead`** blocks every project ability: the base constructor adds it
   to `ActivationBlockedTags`.
 - **Phase:** Press only by default; `bAcceptsRelease = false` for every representative active.
@@ -892,9 +896,8 @@ person at the keyboard, which the harness cannot. They cannot run on the product
 `GrantedAbilities`, the values of Instant Strike and Parry are `TBD`, and the eight aim and time bounds are `TBD` and unset (the seam
 fails closed). A run supplies candidate values locally and untracked (for example in `Saved/Config/WindowsEditor/Game.ini`: the
 eight `Provisional...` keys of `/Script/GameCombat.AethelnAbilitySystemComponent`, `+GrantedAbilities` of the four active classes under
-`/Script/GameCombat.AethelnPlayerState`, `ProvisionalInitialAttributes` of `/Script/GameCombat.AethelnPlayerState` and of
-`/Script/GameCombat.AethelnCombatAICharacter` (the tracked ini leaves both at 0, so a press that costs Endurance is
-`InsufficientResource` and a target has no Health to lose), the class sections of Instant Strike and Parry, and the four key slots of
+`/Script/GameCombat.AethelnPlayerState`, `ProvisionalInitialAttributes` of `/Script/GameCombat.AethelnCombatAICharacter` (the tracked ini leaves it at 0, so a
+target has no Health to lose; the player's provisional values are tracked since #19), the class sections of Instant Strike and Parry, and the four key slots of
 `[/Script/GameUI.AethelnPOCInputComponent]`) and records them verbatim as candidate values for that run, never as tuning. Keys: #82; the
 key slots are the run's own choice and decide nothing. The stance cost is `TBD` and 0 unless the run supplies one, so a stance press
 shows no Endurance change: count its spend from the outcome line, not from Endurance.
@@ -1580,7 +1583,9 @@ All stay `TBD` until the named owner decides.
    the owner dropped on 2026-10-13, so TC-008 needs updating).
 2. **Tuning values:** initial `MaxHealth`, `MaxEndurance`, and `MaxGuard`,
    starting current values, each ability's Endurance cost (or none), and each
-   cooldown duration. Owners: Issue
+   cooldown duration. The player's initial values are set provisionally (owner,
+   [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657), 2026-10-17; re-tuned at the feel
+   test); the AI character's stay open. Owners: Issue
    [#107](https://github.com/ShayShimoni/aetheln-online/issues/107) and the
    evidence tickets (#45).
 3. **Final values** for the PlayerState update frequency and the rate bucket

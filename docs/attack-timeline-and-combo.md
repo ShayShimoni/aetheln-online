@@ -977,7 +977,7 @@ The one exception is the basic chain's provisional values. By owner decision D3
 definition asset `/Game/Combat/Attacks/DA_SwordShieldBasicChain` (#84 P4; before P4 they were
 in `[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`),
 marked provisional. They are not tuning, no number was invented, and the #84 P5
-feel test re-tunes them. The chain is grantable but not granted in production.
+feel test re-tunes them. The chain is granted in production (#19), with the owner's provisional player attributes ([#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657), 2026-10-17).
 
 | Config section | Keys |
 | --- | --- |
@@ -1092,20 +1092,19 @@ records the manual S5 steps below. No #60 PR changes the GameNet vocabulary.
 The automated rows above prove the routing; S5 measures feel and rates with a
 person at the mouse, which the harness cannot. It cannot run on the production
 configuration yet: the eight aim and time bounds are `TBD` and unset (the seam
-fails closed, `InternalFailure`), and the chain is not in `GrantedAbilities`.
-Both are owner and #45 decisions, so this document sets neither. A run supplies
+fails closed, `InternalFailure`). That is an owner and #45 decision, so this
+document sets none. The chain is granted in production (#19). A run supplies
 candidate values locally, untracked (for example in
 `Saved/Config/WindowsEditor/Game.ini`: the eight `Provisional...` keys of
-`/Script/GameCombat.AethelnAbilitySystemComponent` and `+GrantedAbilities` under
-`/Script/GameCombat.AethelnPlayerState`), and records them verbatim as candidate
-values for that run, never as tuning.
+`/Script/GameCombat.AethelnAbilitySystemComponent`), and records them verbatim as
+candidate values for that run, never as tuning.
 
 1. PIE net mode "Play As Client", two players and a separate server, launched with
    `?game=/Script/GameCombat.AethelnCombatGameMode`. Click to capture the mouse.
    Left mouse in Reticle mode must start the chain; Left Alt then a left click
    recaptures and must not attack; a second click attacks (this is the wiring
-   that A22 does not simulate). Under `AethelnCombatGameMode`, with the chain not
-   granted and the bounds unset, every Reticle-mode click is a request the server
+   that A22 does not simulate). Under `AethelnCombatGameMode`, with the bounds
+   unset, every Reticle-mode click is a request the server
    rejects, and each one takes a token from the per-connection rate bucket that
    the dodge shares; the default game mode is unaffected, because its PlayerState
    is not an `IAethelnCombatInputSink`.

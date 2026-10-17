@@ -132,7 +132,9 @@ The basic chain's definition is the asset `DA_SwordShieldBasicChain`
 (#84 P4, `/Game/Combat/Attacks`). The other abilities' definitions are still
 `Config` properties in `DefaultGame.ini`, validated at grant time and failing
 closed when unset. The chain carries the D3 provisional values (`ContentVersion`
-1), so it is grantable but not granted in production. #60 left definitions
+1), so it is grantable and granted in production (#19; the player's provisional
+attributes are owner-set, [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657),
+2026-10-17). #60 left definitions
 in ini until #84 and #106 supplied an asset pipeline; #106 closed with
 Markdown generators only.
 
@@ -539,7 +541,7 @@ is not part of P4.
 | D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Landed in P3 and moved in P4, recorded: the provisional values are in the chain definition asset `DA_SwordShieldBasicChain` (they were in `[/Script/GameCombat.AethelnBasicChainAbility]` until P4, which now holds only the asset path), and the test fixture does not set them. The enemy telegraph values stay with #83 and #20, which own telegraph timing |
 | D4 | Soft references to a binding. The intake policy's `shared-to-client-presentation` rule lets a Shared package soft-reference any client-only `/Game` package, a binding included, which the one-direction rule in [The binding](#the-binding) forbids | Lead (an intake-policy question, not a product rule) | Leave it while no Shared asset soft-references client content. N4 pins today's result for a Shared to client-only `/Game` soft reference; narrowing the rule or adding a binding-specific denial changes the intake policy, its tests, and that pin |
 | D5 | Registry IDs for `Ability.Dodge`, `Ability.Block`, and `Ability.Enemy.Greybox.Strike`, which the tag mapping check lists as pending | #18 (`Ability.Dodge`, `Ability.Block`) and #83 (`Ability.Enemy.Greybox.Strike`) | Add the IDs to the registry, then delete the pending entries in `scripts/design/Test-CombatTagMapping.ps1` and update `$PinnedPending` in `tests/design/Test-CombatRegistry.Tests.ps1` |
-| D6 | Chain cost against `MaxEndurance` bounds test (Residual Risk 6). The owner recorded the player initial attributes on [issue #107](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6176507597) on 2026-10-14 (Health 40, Guard 30, Stamina 20, provisional), but they are not in `Config/DefaultGame.ini` (`AAethelnPlayerState.ProvisionalInitialAttributes` is still all zero), and the Guard and Stamina values in that comment are the reverse of the test enemy section (Endurance 30, Guard 20) that the comment says they match | #107 (landing the values and naming which of Guard or Endurance is 30) | Leave the test out until `ProvisionalInitialAttributes.MaxEndurance` is set by #107. The test then adds the chain (`DA_SwordShieldBasicChain`, `EnduranceCost`) to the resource-bounds list. This lane sets no attribute value |
+| D6 | Chain cost against `MaxEndurance` bounds test (Residual Risk 6). The owner recorded the player initial attributes on [issue #107](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6176507597) on 2026-10-14 (Health 40, Guard 30, Stamina 20, provisional), but they were not in `Config/DefaultGame.ini` (`AAethelnPlayerState.ProvisionalInitialAttributes` was still all zero), and the Guard and Stamina values in that comment were the reverse of the test enemy section (Endurance 30, Guard 20) that the comment says they match | Resolved by the owner's decision of 2026-10-17 ([#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657)): Health 40, Guard 20, Endurance 30, provisional, set in `Config/DefaultGame.ini` with the chain granted (#19) | `Aetheln.GameCombat.Lifecycle.ProductionPlayerConfig` checks the chain's `EnduranceCost` against `MaxEndurance`. This document sets no value |
 
 ## Residual Risks
 
@@ -561,8 +563,9 @@ is not part of P4.
    `UAnimNotify_PlayNiagaraEffect` (P3b, N3), but not the timed Niagara notify
    state `UAnimNotifyState_TimedNiagaraEffect`. That state is refused until a
    reviewed allowlist change adds it.
-6. **Chain cost against resource bounds.** The provisional chain cost of 2
-   exceeds the configured `MaxEndurance` of 0, and the resource-bounds test
+6. **Chain cost against resource bounds (resolved by #19).** The provisional chain cost of 2
+   is within the configured `MaxEndurance` of 30 (owner-set, provisional, [#107 comment 6232938657](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6232938657),
+   2026-10-17), and the resource-bounds test
    (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp`) covers only the
-   three Oathscar actives. The chain is not granted, so this is unreachable
-   today. The chain's cost now lives in its asset (`EnduranceCost`), so the bounds test can read it there. See D6.
+   three Oathscar actives. The chain is granted in production (#19), and
+   `Aetheln.GameCombat.Lifecycle.ProductionPlayerConfig` checks its cost against the configured `MaxEndurance`. The chain's cost now lives in its asset (`EnduranceCost`), so the bounds test can read it there. See D6.
