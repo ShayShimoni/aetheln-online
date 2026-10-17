@@ -8,8 +8,8 @@
 #include "AethelnChainTestFixture.generated.h"
 
 /**
- * The production chain with test hooks. Its authored values are the provisional ones in
- * Config/DefaultGame.ini (#84 D3), read through the parent class section, so no test sets them.
+ * The production chain with test hooks. Its authored values are the provisional ones in the chain's definition
+ * asset (#84 D3, P4), applied to every chain class default at startup, so no test sets them.
  */
 UCLASS(NotBlueprintable, HideDropdown)
 class UAethelnChainTestAbility : public UAethelnBasicChainAbility

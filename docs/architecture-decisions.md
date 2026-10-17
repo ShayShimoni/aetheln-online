@@ -2753,10 +2753,10 @@ Every accepted decision records:
   `AethelnAttackTimeline::FindStepListProblem`), editor `IsDataValid`, and the
   tests `Aetheln.GameCombat.AttackContent.DefinitionValidation` and
   `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing`. No
-  definition asset exists yet. The owner decided the values (#84 D3, 2026-10-12): the
+  definition asset existed at P2. The owner decided the values (#84 D3, 2026-10-12): the
   existing GameTests fixture values are promoted as provisional, with no new
   numbers, and re-tuned at the P5 feel test. P3 promotes them into the ini
-  section of the unmigrated basic chain (`Config/DefaultGame.ini`, marked
+  section of the then unmigrated basic chain (`Config/DefaultGame.ini`, marked
   provisional), and adds the client-only presentation binding class and its
   validator (`Aetheln.GameCombat.AttackContent.PresentationBindingValidation`).
 - **Alternatives:** keep ini (no editor validation or intake binding); a
@@ -2767,7 +2767,7 @@ Every accepted decision records:
   canon does not treat them as hidden information. A definition that fails its
   validator is refused, never replaced by a default or an older version. Any
   authoritative change bumps `ContentVersion` in the same change.
-- **Follow-up (not implemented):** migrating an attack. The ability resolves
+- **Follow-up (landed for the basic chain in #84 P4, not for the other abilities):** migrating an attack. The ability resolves
   its definition on the server at grant and takes the content version, steps,
   sampling bounds, and cost from it; the reads of the ability's
   `ContentVersion` in the ASC and the timeline then come from the definition.
@@ -2776,7 +2776,11 @@ Every accepted decision records:
   an editor session, an LFS lock, and a `runtime-asset-intake.json` record, and
   keeping the same values in both the ini and the asset would be two sources of
   one truth. When the first definition asset lands, its values replace the ini
-  section in the same change.
+  section in the same change. P4 did this for the basic chain: `/Game/Combat/Attacks/DA_SwordShieldBasicChain` holds
+  the values, the chain's ini section holds only the asset path, a missing, invalid, or foreign asset refuses the grant with
+  a validation identifier (`attack_definition_missing`, `attack_definition_invalid`, `attack_definition_ability_mismatch`),
+  and `UAethelnAssetManager` cooks a Shared definition for every target and keeps a client-only binding out of the dedicated-server cook
+  (docs/animation-and-combat-content-pipeline.md, Cook inclusion by audience).
 - **Owner:** Issue #84, with #60, #20, and #260 as consumers and #120 for
   intake.
 - **Revisit trigger:** a definition value that must stay hidden from clients,

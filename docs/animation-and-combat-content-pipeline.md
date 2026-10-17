@@ -128,11 +128,11 @@ authoritative, and changing it bumps nothing.
 
 ### Storage form
 
-Today the definitions are `Config` properties in `DefaultGame.ini`, validated
-at grant time and failing closed when unset
-(`Config/DefaultGame.ini`). The basic chain carries the D3 provisional
-values (first configured `ContentVersion` 1, #84 P3), so it is grantable but
-not granted in production. #60 left definitions
+The basic chain's definition is the asset `DA_SwordShieldBasicChain`
+(#84 P4, `/Game/Combat/Attacks`). The other abilities' definitions are still
+`Config` properties in `DefaultGame.ini`, validated at grant time and failing
+closed when unset. The chain carries the D3 provisional values (`ContentVersion`
+1), so it is grantable but not granted in production. #60 left definitions
 in ini until #84 and #106 supplied an asset pipeline; #106 closed with
 Markdown generators only.
 
@@ -158,16 +158,35 @@ validator, which runs the chain's grant rules through one shared function,
 `AethelnAttackTimeline::FindStepListProblem`, and also requires a stable ID,
 a content version of at least 1, the `Shared` audience, an `Ability.`
 identity tag, and a finite non-negative cost. The editor runs it on save
-through `IsDataValid`. No attack is migrated yet: migration, where the ability
-resolves its definition at grant and takes its content version, steps, and
-cost from it, needs the first `DA_` definition package. That package needs an
-editor session, an LFS lock, and a `runtime-asset-intake.json` record, so it is
-not part of P3, which has fixture assets only. Until it lands, the D3
-provisional values live in one place, the `[/Script/GameCombat.AethelnBasicChainAbility]`
-section of `Config/DefaultGame.ini` (the fixture values, unchanged, marked
-provisional; the test fixture no longer sets them). When the first definition
-asset lands, its values replace that section in the same change, so no value is
-ever in both. Registry membership of the stable ID cannot be checked at runtime or in the
+through `IsDataValid`.
+
+P4 migrates the basic chain, the first attack. The package is
+`/Game/Combat/Attacks/DA_SwordShieldBasicChain` (`Content/Combat/Attacks/DA_SwordShieldBasicChain.uasset`),
+its `StableContentId` is the registry semantic ID `order.oathscar.ability.sword_shield_basic_chain`,
+and it was authored headless in the pinned 5.8.1 editor from the D3 values that were in
+`Config/DefaultGame.ini` (read from the file at `origin/develop` `d2553a0e`, so no number was retyped).
+No definition asset existed before, so nothing moved and no redirector exists (the intake policy forbids them).
+The chain's ini section now holds one line, `Definition=<package path>`, and no value: the asset is the
+only place for `ContentVersion`, the steps, the sampling bounds, and the Endurance cost, so no value is in both.
+`UAethelnBasicChainAbility::ApplyDefinition` copies a usable definition into the fields of every chain class
+default once the engine is up (`FGameCombatModule`, on `OnPostEngineInit`), so no asset loads while classes
+register, and every existing read of the ability (the client's request version, the server's validation state, the
+timeline, the chain state) sees the asset's values unchanged. Instances copy their class default, so tests that mutate an
+instance still work. An ability with another ID must not inherit the chain's path, because config sections are
+read through the parent class: the Instant Strike section clears it.
+
+**Grant-time check.** `FindGrantProblem` examines the reference first, before the inherited checks, so a missing asset
+names itself and not the zero version it leaves behind. The server refuses the grant, and the existing grant log line
+(`Refused to grant ability <class>: it <problem>.`) carries one validation identifier:
+
+| Identifier | Meaning |
+| --- | --- |
+| `attack_definition_missing` | The package does not exist or does not load |
+| `attack_definition_invalid` | The asset fails its own validator (`UAethelnAttackDefinition::FindProblem`) |
+| `attack_definition_ability_mismatch` | The asset's ability ID is not the ability's |
+
+Nothing falls back to another definition, an older version, or an ini value.
+Registry membership of the stable ID cannot be checked at runtime or in the
 editor, because the registry is design data under `design/`; the #120 intake
 review checks it until a tool exists.
 
@@ -272,7 +291,7 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Error | Gate | Status |
 | --- | --- | --- |
 | Missing definition or unset values | Grant validation refuses a zero `ContentVersion` (`Source/GameCombat/Private/AethelnGameplayAbility.cpp:41-44`) and a chain without exactly three valid steps (#60 A5) | Exists |
-| Missing definition asset referenced by an ability | Resolved at grant when an attack is migrated; an unresolved reference refuses the grant | Not present until the first `DA_` definition package lands (TA-027 follow-up); no attack reads a definition asset yet |
+| Missing definition asset referenced by an ability | The chain's `Definition` is copied into the chain class defaults at engine start on every process (server and client), and the reference is validated again on the server at grant and at activation; a missing, invalid, or foreign asset refuses the grant and logs `attack_definition_missing`, `attack_definition_invalid`, or `attack_definition_ability_mismatch` | Exists (P4, N7) for the migrated basic chain. An ability that has not migrated has no reference to miss |
 | Missing montage, section, or effect in a binding | Presentation binding validator | Exists (P3, N3): the montage and its three sections; the binding has no effect field yet |
 | Invalid phase order | Grant validation ordering rules (#60, Step definition), shared with the definition validator | Exists; P2 runs the same rules at editor save |
 | Unsafe volume data | Grant validation: positive extents, non-negative damage and pressure, `MaxTargets >= 1`, pitch clamp in `[0, 90]` | Exists as structural checks only. A maximum reach or shape size is a `TBD` budget (#45, #107); until it exists no validator limits reach, an oversized volume passes, and no `non_promotion` result is produced (Residual Risk 4) |
@@ -419,6 +438,8 @@ validation test, and **P** is two-client PIE recorded in the PR.
 | N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes. Also refuses a missing skeleton, a step count that differs from the definition, a Shared or ServerOnly audience, a name-only notify, a notify on a sequence the montage plays, and a notify on a sequence inside a composite segment. A montage with a plain `UAnimSequence` segment that carries only allowlisted notifies passes, and so does one with the Niagara effect notify. Builds its montages, skeleton, and sockets in memory; no package is added |
 | N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3b | E | A Shared or ServerOnly binding is refused, and the intake policy's hard-reference matrix, applied through `FAethelnContentValidationScanner::IsHardReferenceAllowed` (the call `reference_boundary` makes), refuses a Shared or ServerOnly package that hard-references a client-only binding while a binding may reference the Shared definition. It also pins today's soft-reference result (a Shared package may soft-reference a client-only `/Game` package, a ServerOnly package may not); the pin documents D4 and does not forbid it |
 | N6 | `Aetheln.GameCombat.AttackContent.BindingLookup` | P3b | E | The Asset Registry lookup finds one binding by ability ID and authored content version across packages, returns not found for another version, another ability, an invalid ID, or nothing mounted, returns ambiguous for two bindings with the same key, and editor `IsDataValid` names the duplicate on each. The fixtures are in-memory packages that are never saved |
+| N7 | `Aetheln.GameCombat.AttackContent.MissingDefinitionRefusesGrant` and `Aetheln.GameCombat.AttackContent.ChainReadsDefinitionAsset` | P4 | E | An ability whose `Definition` path names no package is refused at grant with `attack_definition_missing` in the grant log and its problem text; an ability of another ID pointed at the chain's asset is refused with `attack_definition_ability_mismatch`; an in-memory definition with a zero `ContentVersion` is refused with `attack_definition_invalid`; the production chain has no definition problem. The chain's `ContentVersion`, steps, cost, and sampling bounds equal the asset's, the asset is `Shared` with the registry semantic ID, and `DefaultGame.ini` holds none of those values for the chain |
+| N8 | `Aetheln.GameCore.AssetManager.AudienceCookRule` | P4 | E | The cook matrix by audience and target (a `ClientOnly` package is never in a dedicated-server cook, a `ServerOnly` one never in a client-only cook, `Shared` in all), the audience tag parser, the list move, that `UAssetManager::Get()` is the Aetheln manager, and the real `ModifyCook` for the `WindowsClient` and `WindowsServer` targets, which both cook the Shared definition. No `ClientOnly` asset is on disk yet, so its exclusion is proven through the matrix and the list move, not through a cooked package |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
 
 Existing tests that already cover this pipeline: T13, A1, A5, A9, A17, D16,
@@ -428,12 +449,12 @@ the registry tests (which include the tag-to-registry cases of P3b), and the fou
 
 | Issue #84 criterion | Covered by | Status |
 | --- | --- | --- |
-| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; the D3 provisional values are in `Config/DefaultGame.ini` (P3); migrating an attack needs the first `DA_` package and is not done |
+| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; the basic chain is migrated (P4): its D3 provisional values live in `DA_SwordShieldBasicChain` and the chain reads them at grant. The other abilities are not migrated |
 | Montages, animation notifies, sockets, trails, audio, and VFX are presentation or authoring aids and cannot create contact, damage, cooldown, or persistence truth | [Presentation Binding Contract](#presentation-binding-contract); T13, A9, A17, D16; N1 | Enforced in code; N1 pins it in P2 |
 | The server can evaluate authored melee volumes without a client-selected target or client-claimed hit | [Server Evaluation Without Client Targets](#server-evaluation-without-client-targets); #60 A1, A9 | Met by #60 |
-| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 and N6 | Partly exists; P2 added the definition validator and P3 the binding validator. The binding validator exists (P3, N3), and the binding lookup, its duplicate check, and N4 exist (P3b). The grant-time check for a missing definition asset exists only after the first attack migration (TA-027 follow-up), and a definition's registry membership stays with the #120 intake review. Unsafe volume data stays structural until a reach budget exists, so no `non_promotion` result is produced (Residual Risk 4). A content-version mismatch between a binding and its definition is the binding check (P3, N3); a migrated ability takes its version from the definition |
+| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 and N6 | Partly exists; P2 added the definition validator and P3 the binding validator. The binding validator exists (P3, N3), and the binding lookup, its duplicate check, and N4 exist (P3b). The grant-time check for a missing definition asset exists (P4, N7) for the migrated basic chain, and a definition's registry membership stays with the #120 intake review. Unsafe volume data stays structural until a reach budget exists, so no `non_promotion` result is produced (Residual Risk 4). A content-version mismatch between a binding and its definition is the binding check (P3, N3); the migrated chain takes its version from the definition |
 | The pipeline defines source-control/LFS/locking expectations and coordinates with #14 before non-map binary assets land | [Source Control, LFS, and Locking](#source-control-lfs-and-locking) | Defined; no matrix change needed |
-| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on #83, #20, #61, #45, the provisional values now in `Config/DefaultGame.ini` (P3; D3 decided), the D2 placeholder presentation, and owner feel review (O3) |
+| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on #83, #20, #61, #45, the provisional values now in `DA_SwordShieldBasicChain` (P3 promoted them to `Config/DefaultGame.ini`, P4 moved them into the asset; D3 decided), the D2 placeholder presentation, and owner feel review (O3) |
 
 | Definition of done | Covered by | Status |
 | --- | --- | --- |
@@ -449,8 +470,9 @@ Each PR targets `develop` and uses `Refs #84`.
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Definition and focused tests | `UAethelnAttackDefinition` (TA-027), its validator shared with grant validation, editor `IsDataValid`, N1 and N2. No values and no asset. | Engine time |
-| **P3** Presentation binding and provisional values | Landed: the client-only binding (`UAethelnAttackPresentation`), its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3; the D3 provisional values in `Config/DefaultGame.ini`. Landed in P3b: N4, the binding lookup without any public reference to the plugin (see below), and the portable tag-to-registry check. Not landed: the first attack migration, which needs the first `DA_` package (see Storage form). Fixture assets only. | P2; engine time |
-| **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | P3; owner action O2 once the owner has downloaded the sample (O1 is optional and not required for P5 under D2) |
+| **P3** Presentation binding and provisional values | Landed: the client-only binding (`UAethelnAttackPresentation`), its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3; the D3 provisional values in `Config/DefaultGame.ini`. Landed in P3b: N4, the binding lookup without any public reference to the plugin (see below), and the portable tag-to-registry check. Fixture assets only. | P2; engine time |
+| **P4** First definition asset, grant check, cook rule | The first `DA_` definition (the basic chain, with its `runtime-asset-intake.json` record, the attack-content intake step), the missing-definition grant check, the audience cook rule, N7 and N8 (see Storage form and Cook inclusion by audience) | P3b; engine time |
+| **P4b** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin. Not started: it waits on owner action O2; the intake of authored attack content (the definition's record) landed in P4 | P3; owner action O2 once the owner has downloaded the sample (O1 is optional and not required for P5 under D2) |
 | **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3 provisional values (P3); D2 placeholder presentation; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
 
 **Binding lookup (P3).** A binding in the private plugin cannot be reached
@@ -473,15 +495,30 @@ matches it exactly (a searchable `FGameplayTag` would export as
 binding reports every other binding with the same key as an error. The test is
 N6.
 
-**The lookup sees only cooked bindings.** The only cook rule for
-`UAethelnPrimaryAssetDefinition` (`Config/DefaultGame.ini`, `CookRule=Unknown`)
-cooks an asset only when something references it, and nothing references a
-binding by design. A packaged client therefore finds no binding, public ones
-included, and `FindBinding` returns `NotFound` (the neutral fallback) with no
-error. A cook-inclusion rule that adds bindings to the client target only is a
-prerequisite for packaged presentation (#15 and the TA-019 follow-ups); an
-always-cook rule for both targets would put client-only content in the server
-cook. P3b changes no cook configuration.
+**Cook inclusion by audience (P4).** The only cook rule for
+`UAethelnPrimaryAssetDefinition` in `Config/DefaultGame.ini` is `CookRule=Unknown`, which cooks an
+asset only when something references it. Nothing references a binding by design, and a definition is found
+by its config path, which is not a cook reference, so neither would reach a package, and `FindBinding` would
+return `NotFound` (the neutral fallback) in a packaged client. A config rule cannot fix this: the
+cook reads one asset-manager configuration for every target. The project therefore selects
+`UAethelnAssetManager` (`AssetManagerClassName` in `Config/DefaultEngine.ini`), whose `ModifyCook` hook sees the target
+platform and sorts every governed primary asset (`AethelnContent`) by its `Audience` registry tag:
+
+| Audience | Dedicated-server cook | Client-only cook | Full game cook |
+| --- | --- | --- | --- |
+| `Shared` (a definition) | in | in | in |
+| `ClientOnly` (a binding) | never | in | in |
+| `ServerOnly` | in | never | in |
+
+A package never cooked for a target is also in that target's never-cook list, so a stray reference cannot pull it
+in. An asset whose `Audience` tag cannot be read is kept out of every cook, and a session that cooks a
+client-only and a server-only target together is logged as an error and leaves both audiences alone (one list serves every
+platform of a session), so cook the targets separately. Montages, notifies, trails, audio, and
+effects are not primary assets: they enter a cook only as dependencies of a package that is cooked, so keeping the binding
+out of the server cook keeps its presentation assets out too, and the server cook never loads them. The existing
+dedicated-server validators (`Validate-ServerCookReferences.ps1`, `Validate-ContentCookEvidence.ps1`) check the cooked result;
+this rule makes the cook produce it. The test is N8. A packaged client and server cook run is #15's evidence and
+is not part of P4.
 
 ## Owner Actions
 
@@ -499,9 +536,10 @@ cook. P3b changes no cook configuration.
 | --- | --- | --- | --- |
 | D1 | Storage form of authoritative attack definitions ([Storage form](#storage-form)) | Decided by the lead, 2026-10-12: one Shared data asset, [TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition) | Done |
 | D2 | Source of sword-and-shield attack and enemy telegraph animation, which the Epic baseline does not appear to include: a third-party pack through #120 (private plugin under TA-019), Codex-generated motion, a human animator, or a placeholder presentation for P5 evidence | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): a placeholder presentation for P5 evidence; real art later without changing gameplay | Done |
-| D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Landed in P3, recorded: the provisional values are in the ini of the unmigrated chain (`[/Script/GameCombat.AethelnBasicChainAbility]`), and the test fixture no longer sets them. The enemy telegraph values stay with #83 and #20, which own telegraph timing |
+| D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Landed in P3 and moved in P4, recorded: the provisional values are in the chain definition asset `DA_SwordShieldBasicChain` (they were in `[/Script/GameCombat.AethelnBasicChainAbility]` until P4, which now holds only the asset path), and the test fixture does not set them. The enemy telegraph values stay with #83 and #20, which own telegraph timing |
 | D4 | Soft references to a binding. The intake policy's `shared-to-client-presentation` rule lets a Shared package soft-reference any client-only `/Game` package, a binding included, which the one-direction rule in [The binding](#the-binding) forbids | Lead (an intake-policy question, not a product rule) | Leave it while no Shared asset soft-references client content. N4 pins today's result for a Shared to client-only `/Game` soft reference; narrowing the rule or adding a binding-specific denial changes the intake policy, its tests, and that pin |
 | D5 | Registry IDs for `Ability.Dodge`, `Ability.Block`, and `Ability.Enemy.Greybox.Strike`, which the tag mapping check lists as pending | #18 (`Ability.Dodge`, `Ability.Block`) and #83 (`Ability.Enemy.Greybox.Strike`) | Add the IDs to the registry, then delete the pending entries in `scripts/design/Test-CombatTagMapping.ps1` and update `$PinnedPending` in `tests/design/Test-CombatRegistry.Tests.ps1` |
+| D6 | Chain cost against `MaxEndurance` bounds test (Residual Risk 6). The owner recorded the player initial attributes on [issue #107](https://github.com/ShayShimoni/aetheln-online/issues/107#issuecomment-6176507597) on 2026-10-14 (Health 40, Guard 30, Stamina 20, provisional), but they are not in `Config/DefaultGame.ini` (`AAethelnPlayerState.ProvisionalInitialAttributes` is still all zero), and the Guard and Stamina values in that comment are the reverse of the test enemy section (Endurance 30, Guard 20) that the comment says they match | #107 (landing the values and naming which of Guard or Endurance is 30) | Leave the test out until `ProvisionalInitialAttributes.MaxEndurance` is set by #107. The test then adds the chain (`DA_SwordShieldBasicChain`, `EnduranceCost`) to the resource-bounds list. This lane sets no attribute value |
 
 ## Residual Risks
 
@@ -527,4 +565,4 @@ cook. P3b changes no cook configuration.
    exceeds the configured `MaxEndurance` of 0, and the resource-bounds test
    (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp`) covers only the
    three Oathscar actives. The chain is not granted, so this is unreachable
-   today; include the chain in that test when it is granted.
+   today. The chain's cost now lives in its asset (`EnduranceCost`), so the bounds test can read it there. See D6.

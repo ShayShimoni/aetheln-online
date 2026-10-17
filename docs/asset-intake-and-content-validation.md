@@ -57,8 +57,8 @@ LFS object SHA-256, source group, temporary-use owner and approval record, and
 recovery trigger. An added, removed, renamed, duplicated, unhashed, or stale
 package makes the portable registry check fail closed.
 
-The current registry contains 51 packages and only facts recoverable from the
-accepted Issue #13 and Issue #100 records:
+The current registry contains 52 packages and only facts recoverable from the
+accepted Issue #13, Issue #100, and Issue #84 records:
 
 | Source record | Packages | Current audience | Current lifecycle |
 | --- | ---: | --- | --- |
@@ -67,12 +67,13 @@ accepted Issue #13 and Issue #100 records:
 | Issue #100 Epic Level Prototyping closure | 6 | `client_only` under the approved local-only movement POC | `temporary_prototype` |
 | Issue #100 repository-authored map and Blueprint POC packages | 3 | `client_only` | `temporary_prototype` |
 | Issue #100 template-derived POC animation packages | 2 | `client_only` | `temporary_prototype` |
+| Issue #84 repository-authored attack definition `DA_SwordShieldBasicChain` (the first authored attack, TA-027) | 1 | `shared` | `temporary_prototype` |
 
 Issue #100 is permission for that exact one-time temporary closure, not an
 independent conclusion about an Epic license. The registry names Epic as the
 provider where known and does not infer individual authorship. Issue #13's
 approved bootstrap created a blank project with no Starter Content; its record
-does not imply production-art approval. All 51 records explicitly prohibit
+does not imply production-art approval. All 52 records explicitly prohibit
 promotion through grandfathering.
 
 Source groups carry shared author/provider, source, permission, modification,
@@ -193,6 +194,13 @@ required in the dedicated-server cook and prohibited from the client cook.
 dedicated-server cook. The existing dedicated-server dependency validator also
 rejects hard reachability to UI, audio, Niagara, camera, input, and high-detail
 presentation families; this intake comparator does not replace it.
+
+The cook itself applies that audience split to governed primary assets (`AethelnContent`): the project
+asset manager `UAethelnAssetManager` lists a `Shared` package for every target, a `ClientOnly` package for client
+and full game targets only, and a `ServerOnly` package for server and full game targets only, and puts the excluded
+audience in that target's never-cook list (#84 P4, N8 in
+[the pipeline](animation-and-combat-content-pipeline.md#phased-delivery)). Packages that are not primary
+assets, such as montages and effects, are cooked only as dependencies.
 
 ## Rename, move, and recovery
 

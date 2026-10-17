@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AethelnAttackDefinition.h"
 #include "AethelnAttackTypes.h"
 #include "AethelnGameplayAbility.h"
 #include "AethelnBasicChainAbility.generated.h"
@@ -27,6 +28,19 @@ public:
 	UPROPERTY(Config) double ProvisionalMaxSampleDistance = 0.0;
 	UPROPERTY(Config) FGameplayTagContainer ResetTags;
 
+	/**
+	 * The authored definition asset (TA-027, #84). When set, the asset is the only source of ContentVersion, steps,
+	 * sampling bounds and Endurance cost: ApplyDefinition copies them into the fields above once at startup, and an
+	 * unusable asset refuses the grant (FindGrantProblem). When unset, the fields keep their config values.
+	 */
+	UPROPERTY(Config) TSoftObjectPtr<UAethelnAttackDefinition> Definition;
+
+	/** Class defaults only, never an instance: copies a usable definition into this object's authored fields. A missing or unusable one copies nothing. */
+	void ApplyDefinition();
+
+	/** Applies the definition of every chain class default (the chain and its subclasses). Run once the engine is up, so no asset loads while classes register. */
+	static void ApplyDefinitionToClassDefaults();
+
 	/** Server timeline only: end GAS at BufferOpen without ending recovery. */
 	void EndAtBufferOpen();
 
@@ -39,5 +53,12 @@ protected:
 	FGameplayTag CommitmentTag;
 
 private:
+	/** Null when Definition is unset or unusable; the failure reason is FindDefinitionProblem. */
+	const TCHAR* FindDefinitionProblem() const;
+
+	/** Keeps the loaded definition alive for this object. */
+	UPROPERTY(Transient)
+	TObjectPtr<UAethelnAttackDefinition> LoadedDefinition;
+
 	bool bJoinedTimeline = false;
 };

@@ -274,7 +274,7 @@ and `Aetheln.GameCombat.NetworkSpike.AimRateBound`.
 
 Each of the three steps has these authored values. Offsets are seconds from the
 step's authoritative start; every value is `TBD`, except the provisional chain
-values owner decision D3 promoted to `Config/DefaultGame.ini` (see
+values owner decision D3 promoted (to `Config/DefaultGame.ini` in P3, into the chain's definition asset in P4; see
 [Data-Driven Tuning](#data-driven-tuning)).
 
 | Value | Meaning |
@@ -319,7 +319,7 @@ three steps, every value is finite, and:
 P5 adds `InterruptibleUntil` and `bInterruptsTarget` to the step struct, with
 the rule `0 <= InterruptibleUntil <= RecoveryEnd`, and extends A5. The
 production chain's first configured `ContentVersion` is 1, set with the D3
-provisional values in `Config/DefaultGame.ini` (#84 P3), so P5 bumps nothing
+provisional values in its definition asset (#84 P3 and P4), so P5 bumps nothing
 and version 1 includes these fields (see
 [Interruption](#interruption)).
 
@@ -728,9 +728,9 @@ P5 delivers it as follows:
 - **Record.** The record's windows carry `InterruptibleUntil`.
 - **Content version.** The production chain's first configured
   `ContentVersion` is 1, set with the D3 provisional values in
-  `Config/DefaultGame.ini` (#84 P3; unset values still fail the grant), so P5
+  its definition asset (#84 P3 and P4; an unusable asset fails the grant), so P5
   has nothing to bump and version 1 includes the P5 fields. The test fixture
-  no longer sets values; it reads the same ini section.
+  no longer sets values; it reads the same asset through the class defaults.
 - **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
   registered steps, so their later contacts drop. The subsystem then raises
   `OnTargetInterrupted(TargetAsc, ContactTime)`, and the #83 enemy controller
@@ -973,14 +973,15 @@ change bumps the chain's `ContentVersion`.
 
 The one exception is the basic chain's provisional values. By owner decision D3
 ([issue #84 comment 6131999366](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366),
-2026-10-12), the former GameTests fixture values live in
-`[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`,
+2026-10-12), the former GameTests fixture values live in the chain's
+definition asset `/Game/Combat/Attacks/DA_SwordShieldBasicChain` (#84 P4; before P4 they were
+in `[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`),
 marked provisional. They are not tuning, no number was invented, and the #84 P5
 feel test re-tunes them. The chain is grantable but not granted in production.
 
 | Config section | Keys |
 | --- | --- |
-| `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
+| `[/Script/GameCombat.AethelnBasicChainAbility]` | `Definition` only, the path of the definition asset that holds `ContentVersion`, the three steps (the values in [Step definition](#step-definition)), the Endurance cost, and the sampling bounds. The fields `ContentVersion`, `ProvisionalEnduranceCost`, `ProvisionalSteps`, `ProvisionalMaxSampleAngleDegrees`, and `ProvisionalMaxSampleDistance` still read config for an ability with no `Definition` |
 | `[/Script/GameCombat.AethelnCombatTimelineSubsystem]` | `AvoidanceTags` (empty; `State.DodgeInvulnerable` is never added, see [Resolution order](#resolution-order-prototype-subset) step 3) |
 | `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |
