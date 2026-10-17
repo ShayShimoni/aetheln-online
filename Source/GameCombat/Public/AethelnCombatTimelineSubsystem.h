@@ -22,6 +22,9 @@ class GAMECOMBAT_API UAethelnCombatTimelineSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 
+	/** OnRegister takes each ASC's combat id (GetOrAssignCombatId). */
+	friend class UAethelnAbilitySystemComponent;
+
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -93,6 +96,14 @@ public:
 	inline static bool bPlayersHostileForTests = false;
 	int32 GetRegisteredStepCountForTests() const { return Steps.Num(); }
 	int32 GetSweepCountForTests() const { return SweepCountForTests; }
+	/** The ASC's combat id, or 0 if it has none; never assigns one. */
+	uint32 GetCombatIdForTests(const UAethelnAbilitySystemComponent& AbilitySystem) const
+	{
+		const uint32* Id = CombatIds.Find(TWeakObjectPtr<UAethelnAbilitySystemComponent>(const_cast<UAethelnAbilitySystemComponent*>(&AbilitySystem)));
+		return Id != nullptr ? *Id : 0;
+	}
+	/** Contacts the sweeps found on another ASC, before the relation, allowance, or defense checks reject any. */
+	int32 GetCandidateCountForTests() const { return CandidateCountForTests; }
 	void SetNextOrdinalForTests(uint64 Ordinal) { NextOrdinal = Ordinal; }
 	int32 GetBoundaryOwnerCountForTests() const { return AbilitySystems.Num(); }
 #endif
@@ -135,6 +146,12 @@ private:
 	/** Ends the target's step and chain at the contact time if the step at that time is still interruptible, or always when forced. */
 	void Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime, bool bForce = false);
 	void Emit(const FCommitted& Committed);
+	/**
+	 * The ASC's server-issued combat id, assigned on first call and then stable. Every ASC calls it when it registers
+	 * (OnRegister), so ids follow the registration order of the ASC's owner (the PlayerState for players, the pawn for
+	 * enemies) and never the physics hit order of a sweep; the sweep keeps the same call as a fallback. 0 when the ids
+	 * are exhausted.
+	 */
 	uint32 GetOrAssignCombatId(UAethelnAbilitySystemComponent& AbilitySystem);
 	TArray<FStep> Steps;
 	TArray<TWeakObjectPtr<UAethelnAbilitySystemComponent>> AbilitySystems;
@@ -145,5 +162,6 @@ private:
 	FDelegateHandle TickHandle;
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 SweepCountForTests = 0;
+	int32 CandidateCountForTests = 0;
 #endif
 };

@@ -286,6 +286,8 @@ public:
 
 	/** Flushes an open rate-limited window. */
 	virtual void OnUnregister() override;
+	/** Server: takes the combat id here, so the total order's target key follows registration order, not sweep hit order. */
+	virtual void OnRegister() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 #if WITH_DEV_AUTOMATION_TESTS
