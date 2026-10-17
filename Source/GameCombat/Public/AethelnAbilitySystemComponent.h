@@ -301,6 +301,9 @@ public:
 	void CallServerTryActivateAbilityForTests(FGameplayAbilitySpecHandle Handle);
 	void CallServerTryActivateAbilityWithEventDataForTests(FGameplayAbilitySpecHandle Handle, const FGameplayEventData& EventData);
 	bool HasReplicatedTargetDataForTests(FGameplayAbilitySpecHandle Handle, const FPredictionKey& PredictionKey) const;
+	/** The owner's two client RPC bodies, called directly (#18 P5, D26): the loose commitment tag exists only on the server. */
+	void ReceiveCombatActivationForTests(const FAethelnCombatActivationRecord& Record) { ClientCombatActivation_Implementation(Record); }
+	void ReceiveChainEndedForTests(const FGuid& ActivationId, EAethelnChainEndReason Reason) { ClientChainEnded_Implementation(ActivationId, Reason); }
 #endif
 
 protected:
@@ -371,6 +374,11 @@ private:
 	void UnbindChainResetTags();
 	UAethelnCombatTimelineSubsystem* GetCombatTimeline() const;
 	FAethelnServerChainState ChainState;
+	/**
+	 * Owner only, never replicated (#18 P5, D26): when the commitment window of the last started chain step ends, in server world
+	 * time; 0 means none. The commitment tag is a server-only loose tag, so the owner's local dodge gate reads this instead.
+	 */
+	double OwnerCommitmentEndServerTime = 0.0;
 	TArray<TPair<FGameplayTag, FDelegateHandle>> ChainResetHandles;
 	double LastChainResetTime = 0.0;
 	uint32 AttackActivationCounter = 0;

@@ -5,6 +5,7 @@
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnCombatGameMode.h"
 #include "AethelnCombatTestWorld.h"
+#include "AethelnDefenseTestFixture.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnPOCInputComponent.h"
 #include "AethelnPOCInputTestFixture.h"
@@ -147,10 +148,10 @@ namespace AethelnPOCInputTests
 		FDelegateHandle OutcomeHandle;
 		FDelegateHandle RecordHandle;
 
-		/** The pawn takes the chain ability; InputClass is the component class the pawn selects (APawn::OverrideInputComponentClass). */
-		bool Init(FAutomationTestBase& Test, UClass* PawnClass, UClass* InputClass)
+		/** The pawn takes the chain ability, or Abilities; InputClass is the component class the pawn selects (APawn::OverrideInputComponentClass). */
+		bool Init(FAutomationTestBase& Test, UClass* PawnClass, UClass* InputClass, const TArray<TSubclassOf<UGameplayAbility>>& Abilities = { UAethelnChainTestAbility::StaticClass() })
 		{
-			if (!AethelnCombatTests::SpawnTestPlayer(Test, World, Player, { UAethelnChainTestAbility::StaticClass() })
+			if (!AethelnCombatTests::SpawnTestPlayer(Test, World, Player, Abilities)
 				|| !Test.TestNotNull(TEXT("A pawn class is given"), PawnClass))
 			{
 				return false;
@@ -214,6 +215,7 @@ bool FAethelnPOCMappingInventoryTest::RunTest(const FString& Parameters)
 	Unkeyed->ParryKey = FKey();
 	Unkeyed->AttackStanceKey = FKey();
 	Unkeyed->DefenseStanceKey = FKey();
+	Unkeyed->DodgeKey = EKeys::LeftControl;
 	Unkeyed->RegisterComponent();
 	const UInputMappingContext* Context = ReadObjectProperty<UInputMappingContext>(*Unkeyed, TEXT("MappingContext"));
 	if (!TestNotNull(TEXT("Registration built the mapping context"), Context)) { return false; }
@@ -236,8 +238,10 @@ bool FAethelnPOCMappingInventoryTest::RunTest(const FString& Parameters)
 		{ TEXT("IA_POC_ViewportRecapture"), EKeys::LeftMouseButton, EInputActionValueType::Boolean },
 		{ TEXT("IA_POC_Jump"), EKeys::SpaceBar, EInputActionValueType::Boolean },
 		{ TEXT("IA_POC_Sprint"), EKeys::LeftShift, EInputActionValueType::Boolean },
+		{ TEXT("IA_POC_Block"), EKeys::RightMouseButton, EInputActionValueType::Boolean },
+		{ TEXT("IA_POC_Dodge"), EKeys::LeftControl, EInputActionValueType::Boolean },
 	};
-	TestEqual(TEXT("Only the ten inventoried mappings exist: no attack, defense, dodge, ability, gamepad, or touch key"), Context->GetMappings().Num(), static_cast<int32>(UE_ARRAY_COUNT(Expected)));
+	TestEqual(TEXT("Only the twelve inventoried mappings exist: no ability, gamepad, or touch key"), Context->GetMappings().Num(), static_cast<int32>(UE_ARRAY_COUNT(Expected)));
 	for (const FExpected& Case : Expected)
 	{
 		const FEnhancedActionKeyMapping* Mapping = FindMapping(*Context, Case.Action);
@@ -280,6 +284,7 @@ bool FAethelnPOCMappingInventoryTest::RunTest(const FString& Parameters)
 	Keyed->ParryKey = EKeys::One;
 	Keyed->AttackStanceKey = FKey();
 	Keyed->DefenseStanceKey = EKeys::Two;
+	Keyed->DodgeKey = EKeys::F;
 	Keyed->RegisterComponent();
 	const UInputMappingContext* KeyedContext = ReadObjectProperty<UInputMappingContext>(*Keyed, TEXT("MappingContext"));
 	if (TestNotNull(TEXT("The keyed component built its context"), KeyedContext))
@@ -287,10 +292,22 @@ bool FAethelnPOCMappingInventoryTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Two configured keys add two mappings"), KeyedContext->GetMappings().Num(), static_cast<int32>(UE_ARRAY_COUNT(Expected)) + 2);
 		const FEnhancedActionKeyMapping* Parry = FindMapping(*KeyedContext, TEXT("IA_POC_Parry"));
 		const FEnhancedActionKeyMapping* Defense = FindMapping(*KeyedContext, TEXT("IA_POC_DefenseStance"));
+		const FEnhancedActionKeyMapping* Dodge = FindMapping(*KeyedContext, TEXT("IA_POC_Dodge"));
+		TestTrue(TEXT("The dodge key is remappable: the configured key maps the one dodge action"), Dodge != nullptr && Dodge->Key == EKeys::F);
 		TestTrue(TEXT("The configured Parry key maps Parry"), Parry != nullptr && Parry->Key == EKeys::One);
 		TestTrue(TEXT("The configured Defense Stance key maps Defense Stance"), Defense != nullptr && Defense->Key == EKeys::Two);
 		TestNull(TEXT("Instant Strike stays unmapped"), FindMapping(*KeyedContext, TEXT("IA_POC_InstantStrike")));
 		TestNull(TEXT("Attack Stance stays unmapped"), FindMapping(*KeyedContext, TEXT("IA_POC_AttackStance")));
+	}
+
+	// No dodge key maps no dodge action, as for the actives; the block stays on the right mouse button.
+	UAethelnPOCInputComponent* NoDodge = NewObject<UAethelnPOCInputComponent>(Owner);
+	NoDodge->DodgeKey = FKey();
+	NoDodge->RegisterComponent();
+	if (const UInputMappingContext* NoDodgeContext = ReadObjectProperty<UInputMappingContext>(*NoDodge, TEXT("MappingContext")))
+	{
+		TestNull(TEXT("An invalid dodge key maps no dodge action"), FindMapping(*NoDodgeContext, TEXT("IA_POC_Dodge")));
+		TestNotNull(TEXT("The block stays mapped"), FindMapping(*NoDodgeContext, TEXT("IA_POC_Block")));
 	}
 	return true;
 }
@@ -327,6 +344,10 @@ bool FAethelnPOCCursorModeGatesPressesTest::RunTest(const FString& Parameters)
 		ExpectedBindings.Add(FString(Action) + TEXT(":Canceled"));
 	}
 	for (const TCHAR* Action : ActiveActions) { ExpectedBindings.Add(FString(Action) + TEXT(":Started")); }
+	ExpectedBindings.Add(TEXT("IA_POC_Dodge:Started"));
+	ExpectedBindings.Add(TEXT("IA_POC_Block:Started"));
+	ExpectedBindings.Add(TEXT("IA_POC_Block:Completed"));
+	ExpectedBindings.Add(TEXT("IA_POC_Block:Canceled"));
 	ExpectedBindings.Add(TEXT("IA_POC_Look:Triggered"));
 	ExpectedBindings.Add(TEXT("IA_POC_Zoom:Triggered"));
 	ExpectedBindings.Add(TEXT("IA_POC_ToggleControlMode:Started"));
@@ -382,8 +403,10 @@ bool FAethelnPOCCursorModeGatesPressesTest::RunTest(const FString& Parameters)
 	Fire(Input, TEXT("IA_POC_Look"), ETriggerEvent::Triggered);
 	Fire(Input, TEXT("IA_POC_Look"), ETriggerEvent::Triggered);
 	for (const TCHAR* Action : ActiveActions) { F.Press(Action); }
-	TestEqual(TEXT("No started handler reached the receiver in Cursor mode"), Spy->CallCount(), 0);
-	TestEqual(TEXT("No active press reached the seam in Cursor mode"), F.Outcomes.Num(), 0);
+	F.Press(TEXT("IA_POC_Dodge"));
+	F.Press(TEXT("IA_POC_Block"));
+	TestEqual(TEXT("No started handler reached the receiver in Cursor mode, the dodge press included"), Spy->CallCount(), 0);
+	TestEqual(TEXT("No active or block press reached the seam in Cursor mode"), F.Outcomes.Num(), 0);
 	TestEqual(TEXT("No new activation started in Cursor mode (the one record is the Reticle-mode attack)"), F.Records.Num(), 1);
 
 	// A release or cancel still clears state, so a key released in Cursor mode is not left held.
@@ -403,6 +426,108 @@ bool FAethelnPOCCursorModeGatesPressesTest::RunTest(const FString& Parameters)
 		Fire(Input, Move, ETriggerEvent::Canceled);
 		TestTrue(*FString::Printf(TEXT("%s cancel sends zero move input in Cursor mode"), Move), Spy->MoveInputs.Num() == Before + 2 && Spy->MoveInputs.Last().IsNearlyZero());
 	}
+	return true;
+}
+
+// #18 P5, Test Plan D26 (docs/dodge-and-block.md). The dodge key and the right mouse button on the real component with a recording
+// receiver, in an authority world with a real PlayerState and seam, so "sent" is read from the seam's outcome and the Blocking tag.
+// Red-first: with the right mouse handler stubbed to send nothing, "The right mouse press reaches the seam" is the line that flips; with
+// the release not sent on Cursor entry, "Cursor entry releases the held block" is. The local gate is the ASC's CanPredictDodge, whose
+// commitment-window check reads the owner's ClientCombatActivation record: the record is delivered through the owner's own RPC body, so
+// no server-only commitment tag is involved, and "The gate fails during the commitment window" flips if the check is removed.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnPOCDodgeAndBlockBindingsTest,
+	"Aetheln.POC.Input.DodgeAndBlockBindings",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnPOCDodgeAndBlockBindingsTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnPOCInputTests;
+	FInputFixture F;
+	if (!F.Init(*this, AAethelnPOCInputSpyCharacter::StaticClass(), UAethelnPOCInputComponent::StaticClass(),
+		{ UAethelnBlockTestAbility::StaticClass(), UAethelnDodgeTestAbility::StaticClass(), UAethelnChainTestAbility::StaticClass() })) { return false; }
+	AAethelnPOCInputSpyCharacter* Spy = CastChecked<AAethelnPOCInputSpyCharacter>(F.Pawn);
+	UAethelnAbilitySystemComponent& AbilitySystem = *F.Player.AbilitySystem;
+	const FGameplayTag Blocking = AethelnGameplayTags::State_Blocking;
+	const auto ClearBlockCooldown = [&AbilitySystem]() { AbilitySystem.RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::Cooldown_Block)); };
+
+	// The default keys: one remappable dodge key (Left Control, Q1) and the right mouse button, in the built context.
+	const UInputMappingContext* Context = ReadObjectProperty<UInputMappingContext>(*F.Input, TEXT("MappingContext"));
+	if (!TestNotNull(TEXT("The component built its context"), Context)) { return false; }
+	const FEnhancedActionKeyMapping* DodgeMapping = FindMapping(*Context, TEXT("IA_POC_Dodge"));
+	const FEnhancedActionKeyMapping* BlockMapping = FindMapping(*Context, TEXT("IA_POC_Block"));
+	TestTrue(TEXT("The dodge defaults to Left Control"), DodgeMapping != nullptr && DodgeMapping->Key == EKeys::LeftControl);
+	TestTrue(TEXT("The block is the right mouse button"), BlockMapping != nullptr && BlockMapping->Key == EKeys::RightMouseButton);
+
+	// Reticle mode: the dodge press reaches the pawn's receiver, whose own gate sets the flag; it is never a seam press.
+	TestEqual(TEXT("The dodge key's binding ran"), F.Press(TEXT("IA_POC_Dodge")), 1);
+	TestEqual(TEXT("A Reticle-mode dodge press reaches the receiver"), Spy->DodgePressedCount, 1);
+	TestEqual(TEXT("The dodge press is not a seam request"), F.Outcomes.Num(), 0);
+
+	// Reticle mode: right mouse maps to Press and Release.
+	TestEqual(TEXT("The right mouse press ran"), F.Press(TEXT("IA_POC_Block")), 1);
+	if (TestEqual(TEXT("The right mouse press reaches the seam"), F.Outcomes.Num(), 1)) { TestEqual(TEXT("The press is accepted"), F.Outcomes[0], EResult::Accepted); }
+	TestTrue(TEXT("The block is raised"), AbilitySystem.HasMatchingGameplayTag(Blocking));
+	TestTrue(TEXT("A held block does not close the dodge gate: an accepted dodge ends it (Q10)"), AbilitySystem.CanPredictDodge());
+	TestEqual(TEXT("The right mouse release ran"), F.Release(TEXT("IA_POC_Block")), 1);
+	if (TestEqual(TEXT("The right mouse release reaches the seam"), F.Outcomes.Num(), 2)) { TestEqual(TEXT("The release is accepted"), F.Outcomes[1], EResult::Accepted); }
+	TestFalse(TEXT("The release lowers the block"), AbilitySystem.HasMatchingGameplayTag(Blocking));
+	F.Release(TEXT("IA_POC_Block"));
+	Fire(*F.Input, TEXT("IA_POC_Block"), ETriggerEvent::Canceled);
+	TestEqual(TEXT("A release or cancel with nothing held sends nothing"), F.Outcomes.Num(), 2);
+
+	// Cursor entry releases a held block, once; the key release the flush raises afterwards sends nothing more.
+	ClearBlockCooldown();
+	F.Press(TEXT("IA_POC_Block"));
+	TestTrue(TEXT("The block is raised again"), AbilitySystem.HasMatchingGameplayTag(Blocking));
+	TestEqual(TEXT("The Cursor toggle ran"), F.Press(TEXT("IA_POC_ToggleControlMode")), 1);
+	TestFalse(TEXT("Cursor entry releases the held block"), AbilitySystem.HasMatchingGameplayTag(Blocking));
+	TestEqual(TEXT("The press and the Cursor release were the only requests"), F.Outcomes.Num(), 4);
+	F.Release(TEXT("IA_POC_Block"));
+	Fire(*F.Input, TEXT("IA_POC_Block"), ETriggerEvent::Canceled);
+	TestEqual(TEXT("The flushed key release sends no second release"), F.Outcomes.Num(), 4);
+
+	// Cursor mode: neither key does anything, and the recapture click is never a block (nor an attack).
+	ClearBlockCooldown();
+	Spy->ResetRecords();
+	F.Press(TEXT("IA_POC_Block"));
+	F.Press(TEXT("IA_POC_Dodge"));
+	TestEqual(TEXT("A Cursor-mode dodge press does not reach the receiver"), Spy->DodgePressedCount, 0);
+	TestEqual(TEXT("A Cursor-mode block press sends nothing"), F.Outcomes.Num(), 4);
+	TestEqual(TEXT("The recapture click ran"), F.Press(TEXT("IA_POC_ViewportRecapture")), 1);
+	TestEqual(TEXT("The recapture click sends no request"), F.Outcomes.Num(), 4);
+	TestFalse(TEXT("The recapture click raises no block"), AbilitySystem.HasMatchingGameplayTag(Blocking));
+	TestEqual(TEXT("The recapture click starts no attack"), F.Records.Num(), 0);
+	F.Release(TEXT("IA_POC_ViewportRecapture"));
+	F.Release(TEXT("IA_POC_Block"));
+	TestEqual(TEXT("A release with nothing held sends nothing"), F.Outcomes.Num(), 4);
+
+	// The local gate (ASC::CanPredictDodge), here with the fixture dodge granted and no server-only tag on this ASC.
+	// Record times are relative to now: a window ends at StartServerTime + CancelOpen, and a window ending now is over (half-open).
+	const double Now = F.World.World->GetTimeSeconds();
+	const auto Record = [Now](double StartAgo, double CancelOpen)
+	{
+		FAethelnCombatActivationRecord Result;
+		Result.ActivationId = FGuid::NewGuid();
+		Result.StartServerTime = Now - StartAgo;
+		Result.Windows.CancelOpen = CancelOpen;
+		return Result;
+	};
+	TestTrue(TEXT("The gate passes with nothing in the way"), AbilitySystem.CanPredictDodge());
+	AbilitySystem.ReceiveCombatActivationForTests(Record(0.25, 0.5));
+	TestFalse(TEXT("The gate fails during the commitment window of an owner record"), AbilitySystem.CanPredictDodge());
+	AbilitySystem.ReceiveCombatActivationForTests(Record(0.5, 0.5));
+	TestTrue(TEXT("The gate passes once the window has ended"), AbilitySystem.CanPredictDodge());
+	AbilitySystem.ReceiveCombatActivationForTests(Record(0.0, 0.0));
+	TestTrue(TEXT("A step with no commitment window never closes the gate"), AbilitySystem.CanPredictDodge());
+	const FAethelnCombatActivationRecord Open = Record(0.0, 0.5);
+	AbilitySystem.ReceiveCombatActivationForTests(Open);
+	TestFalse(TEXT("The gate fails again in the next step's window"), AbilitySystem.CanPredictDodge());
+	AbilitySystem.ReceiveChainEndedForTests(Open.ActivationId, EAethelnChainEndReason::Completed);
+	TestTrue(TEXT("The gate passes when the chain ends"), AbilitySystem.CanPredictDodge());
+	AbilitySystem.AddLooseGameplayTag(AethelnGameplayTags::State_Staggered);
+	TestFalse(TEXT("The gate fails while a blocking tag the owner can see is present"), AbilitySystem.CanPredictDodge());
+	AbilitySystem.RemoveLooseGameplayTag(AethelnGameplayTags::State_Staggered);
+	TestTrue(TEXT("The gate passes when the tag is gone"), AbilitySystem.CanPredictDodge());
 	return true;
 }
 

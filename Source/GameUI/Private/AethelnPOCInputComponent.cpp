@@ -194,6 +194,17 @@ bool SubmitAbilityPress(APlayerController* Controller, FGameplayTag AbilityId)
 	return true;
 }
 
+bool SubmitAbilityRelease(APlayerController* Controller, FGameplayTag AbilityId)
+{
+	IAethelnCombatInputSink* Sink = Controller != nullptr ? Cast<IAethelnCombatInputSink>(Controller->PlayerState.Get()) : nullptr;
+	if (Sink == nullptr)
+	{
+		return false;
+	}
+	Sink->RequestAbilityRelease(AbilityId);
+	return true;
+}
+
 bool SubmitPrimaryAttack(APlayerController* Controller)
 {
 	return SubmitAbilityPress(Controller, AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
@@ -208,6 +219,7 @@ UAethelnPOCInputComponent::UAethelnPOCInputComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+	DodgeKey = EKeys::LeftControl;
 }
 
 void UAethelnPOCInputComponent::OnRegister()
@@ -318,6 +330,12 @@ void UAethelnPOCInputComponent::InitializeActions()
 		RF_Transient);
 	ViewportRecaptureAction->ValueType = EInputActionValueType::Boolean;
 
+	DodgeAction = NewObject<UInputAction>(this, TEXT("IA_POC_Dodge"), RF_Transient);
+	DodgeAction->ValueType = EInputActionValueType::Boolean;
+
+	BlockAction = NewObject<UInputAction>(this, TEXT("IA_POC_Block"), RF_Transient);
+	BlockAction->ValueType = EInputActionValueType::Boolean;
+
 	JumpAction = NewObject<UInputAction>(this, TEXT("IA_POC_Jump"), RF_Transient);
 	JumpAction->ValueType = EInputActionValueType::Boolean;
 
@@ -343,6 +361,12 @@ void UAethelnPOCInputComponent::InitializeActions()
 
 	MappingContext->MapKey(JumpAction, EKeys::SpaceBar);
 	MappingContext->MapKey(SprintAction, EKeys::LeftShift);
+	// #18 P5: the block is the right mouse button, held; the dodge is one remappable key, Left Control by default (Q1).
+	MappingContext->MapKey(BlockAction, EKeys::RightMouseButton);
+	if (DodgeKey.IsValid())
+	{
+		MappingContext->MapKey(DodgeAction, DodgeKey);
+	}
 
 	// The four representative Oathscar actives (#260 P5), in the order of ActiveAbilityIds(). The key layout is #82's: a key
 	// maps only if one is configured, and none is by default.
@@ -409,6 +433,10 @@ void UAethelnPOCInputComponent::BindReceiver()
 	BindAction(SprintAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleSprintStarted);
 	BindAction(SprintAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleSprintStopped);
 	BindAction(SprintAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleSprintStopped);
+	BindAction(DodgeAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleDodgePressed);
+	BindAction(BlockAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleBlockPressed);
+	BindAction(BlockAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleBlockReleased);
+	BindAction(BlockAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleBlockReleased);
 	const TArray<FGameplayTag> ActiveIds = ActiveAbilityIds();
 	for (int32 Index = 0; Index < ActiveActions.Num(); ++Index)
 	{
@@ -517,6 +545,7 @@ void UAethelnPOCInputComponent::ResetGameplayInputState()
 	bMoveLeftHeld = false;
 	bMoveRightHeld = false;
 	PrimaryButton.Release();
+	ReleaseHeldBlock();
 	SetComponentTickEnabled(false);
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
@@ -771,6 +800,45 @@ void UAethelnPOCInputComponent::HandleActivePress(const FInputActionValue& Value
 {
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	RouteActivePress(ControlMode, OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr, AbilityId);
+}
+
+void UAethelnPOCInputComponent::HandleDodgePressed(const FInputActionValue& Value)
+{
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
+	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
+	{
+		Receiver->ReceiveDodgePressed();
+	}
+}
+
+void UAethelnPOCInputComponent::HandleBlockPressed(const FInputActionValue& Value)
+{
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	bBlockHeld = SubmitAbilityPress(OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr, AethelnGameplayTags::Ability_Block);
+}
+
+void UAethelnPOCInputComponent::HandleBlockReleased(const FInputActionValue& Value)
+{
+	ReleaseHeldBlock();
+}
+
+void UAethelnPOCInputComponent::ReleaseHeldBlock()
+{
+	if (!bBlockHeld)
+	{
+		return;
+	}
+	// Cleared first: the key flush that follows Cursor entry raises the release again, and it must not send a second one.
+	bBlockHeld = false;
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	SubmitAbilityRelease(OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr, AethelnGameplayTags::Ability_Block);
 }
 
 void UAethelnPOCInputComponent::HandleJumpStarted(const FInputActionValue& Value)

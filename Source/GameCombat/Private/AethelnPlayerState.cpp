@@ -120,6 +120,14 @@ void AAethelnPlayerState::RequestAbilityPress(FGameplayTag AbilityId)
 	}
 }
 
+void AAethelnPlayerState::RequestAbilityRelease(FGameplayTag AbilityId)
+{
+	if (AbilitySystemComponent != nullptr)
+	{
+		AbilitySystemComponent->RequestActivation(AbilityId, EAethelnActivationPhase::Release);
+	}
+}
+
 FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
 {
 	FAethelnHudSnapshot Snapshot;

@@ -185,8 +185,8 @@ Existing code at `f173388`:
 | `UAethelnCombatTimelineSubsystem` (#60, extend) | GameCombat | Holds the defense slot per ASC (`SetDefenseState` refuses a second held slot, `EndDefenseState` stamps the exclusive end, `FindDefenseState`); step 3 asks `IsAvoidingAt`; step 4 evaluates the slot's interval and `AethelnAttackTimeline::IsInsideDefenseArc` at the contact time. |
 | `UAethelnAbilitySystemComponent` (extend) | GameCombat | The movement-carried seam entry and its owner outcome RPC; the avoidance window (`IsAvoidingAt`); the dodge's `State.Dead` binding; `CancelBlock`, which an accepted dodge calls (Q10). |
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnMovementActionAuthority` by forwarding to its ASC. |
-| `IAethelnCombatInputSink` (#60 P6, extend) | GameCore | P5 adds `RequestAbilityRelease(FGameplayTag AbilityId)` beside #60's press. |
-| `UAethelnPOCInputComponent` (extend) | GameUI | P5: dodge press (key per Q1) and right-mouse hold, Reticle mode only; Cursor entry releases a held block. |
+| `IAethelnCombatInputSink` (#60 P6, extend) | GameCore | P5 adds `RequestAbilityRelease(FGameplayTag AbilityId)` beside #60's press. `AAethelnPlayerState` implements it as the same activation request with the Release phase, so no new RPC exists. |
+| `UAethelnPOCInputComponent` (extend) | GameUI | P5: dodge press (`IA_POC_Dodge`, key per Q1, calls the pawn receiver's `ReceiveDodgePressed`) and right-mouse hold (`IA_POC_Block`, `Ability.Block` through the input sink), Reticle mode only; Cursor entry and focus loss send the release of a held block once; on teardown the client only clears its held state, and the server's avatar-loss path ends the block. |
 
 GameCore stays free of GAS: the movement component reaches the authority only
 through the interface, found through `CharacterOwner->GetPlayerState()`. A
@@ -215,7 +215,9 @@ knows them, and the local movement state. The owner sees the replicated
 `State.*` tags directly. The chain's commitment tag (Q10) is a server-only
 loose tag in #60, so the gate derives it from #60's owner-only
 `ClientCombatActivation` record, which carries the step's start time and its
-commitment offset, until that window ends or `ClientChainEnded` arrives.
+commitment offset, until that window ends or `ClientChainEnded` arrives. The
+ASC keeps that window's end (set by the record, cleared by the chain end), and
+`CanPredictDodge` fails until the owner's server-time estimate reaches it.
 Without that check, under Q10 every dodge pressed during an attack's
 commitment window would be predicted, refused, and rolled back. The gate
 decides whether to send a request and predict; it is not GAS prediction. The
@@ -987,8 +989,8 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D23 | `Aetheln.GameCombat.Defense.ActionRelations` | P4 | H | The adopted Q10 relations with test tags: a dodge ends a block; a block is refused during `State.Dodging`; the chain's commitment tag blocks both; a dodge or block activation resets the chain (`OtherAction`); a second defense slot fails closed |
 | D24 | `Aetheln.GameCombat.Defense.NetworkConditionsBlock` | P4 | H | Press and Release under normal, high-latency, and packet-loss delivery around enemy contacts: blocked exactly when the server arrival precedes the contact under the stamping rule; duplicated and reordered requests get sequence reasons; the hook never runs twice |
 | D25 | `Aetheln.GameCombat.Defense.DefenseResultTelemetry` | P4 | H | `Avoided`, `Blocked`, and `GuardBroken` emit the events in the table, with no target identity and no Guard value (`Parried` reports as Block, #260 P3, and K6 checks it) |
-| D26 | `Aetheln.POC.Input.DodgeAndBlockBindings` | P5 | H | A dodge press sets the flag only in Reticle mode and when the local gate passes; the gate fails during the commitment window of an owner `ClientCombatActivation` record and while a replicated blocking tag is present; right mouse maps to Press and Release; Cursor entry releases a held block; the recapture click is never a block |
-| D27 | `Aetheln.GameCombat.Net.DodgeAndBlockTwoClients` | P5 | P | Additional PIE evidence under #82 C1 and C2: the owner's predicted dodge and the other client's view follow the same path; outcomes go to the owner only; both clients see the tags and cues; refused-dodge correction rates recorded |
+| D26 | `Aetheln.POC.Input.DodgeAndBlockBindings` | P5 | H | A dodge press sets the flag only in Reticle mode and when the local gate passes; the gate fails during the commitment window of an owner `ClientCombatActivation` record and while a replicated blocking tag is present; right mouse maps to Press and Release; Cursor entry releases a held block; the recapture click is never a block. Landed in P5: the key press reaches the pawn receiver (the movement flag path, never a seam press, which the server refuses for a movement-carried ability); the gate rows run on the ASC's `CanPredictDodge` with the owner's record delivered through its own RPC body; a held block does not close the gate (Q10) |
+| D27 | `Aetheln.GameCombat.Net.DodgeAndBlockTwoClients` | P5 | P | Additional PIE evidence under #82 C1 and C2: the owner's predicted dodge and the other client's view follow the same path; outcomes go to the owner only; both clients see the tags and cues; refused-dodge correction rates recorded. Landed in P5 for the clean link (C1): a dedicated server and two clients; the owner presses and releases the block through the GameUI entries, raises it again and dodges while it is held (the accepted dodge ends it, Q10, and the last release is the benign `ActivationBlocked`); the owner gets one outcome per request and one movement outcome; the observer sees both tags and receives no owner RPC; the server pawn, the owner's client and the observer's client end within 5 cm of each other after the authored distance. The impaired kinds (C2), the refused dodge's correction rate and the contact cues are the manual steps below |
 | D28 | Packaged two-client dodge and block run | later | K | Evidence for #2 and #48; not required to merge #18 |
 
 The selected T1 checklist extends D7 to D16 and #19
@@ -1009,6 +1011,26 @@ head on the pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and
 P4 run `Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and
 records the manual PIE steps.
 
+**Manual PIE steps (P5).** These cover what D27 does not. Start the editor with
+the combat game mode, two clients and a dedicated server (the C1 setup of the
+input spike), with the fixture dodge and block granted, and set Left Control and
+the right mouse button as bound. Every value is a fixture value, not tuning.
+
+1. Hold the right mouse button: the block tag shows on both clients; release it:
+   the tag ends. Press Left Alt while holding it: the block ends at once and the
+   later key release sends nothing. Click the viewport to recapture: no block, no
+   attack.
+2. Press Left Control while walking: the owner's pawn dodges the authored
+   distance with no visible correction, and the other client sees the same path.
+   Press it again inside the cooldown, and during an attack's commitment window:
+   no dodge starts, so no correction.
+3. Repeat step 2 under each C2 kind of the input spike (one run per #44 catalog kind) and
+   record, per kind, how many dodges were refused and corrected (the refused
+   dodge's correction rate, Residual Risks item 6).
+4. Swing an enemy step at a blocking player and at a dodging player: both clients
+   see the result cue (blocked, avoided), and only the defender receives owner
+   RPCs.
+
 ## Acceptance-Criteria Mapping
 
 | Issue #18 item | Tests and text |
@@ -1020,7 +1042,7 @@ records the manual PIE steps.
 | AC5 Invalid repeated dodge requests are rejected | D5, D8, D9, D12; [Rejections](#rejections) |
 | DoD1 Normal, high-latency, and packet-loss cases are tested | Automated (owner-approved Q20): D5, D12, D24. D27 is additional PIE evidence. |
 | DoD2 The server-owned authored window is authoritative; animation only visualizes it | D10, D16; [Prediction Policy](#prediction-policy) |
-| DoD3 Boundary timestamp, duplicate/reordered request, cooldown, distance, disconnect, and missing-presentation cases | Boundaries D10, D19, D21; duplicate and reordered D5, D12, D24; cooldown D9; distance D2, D6; disconnect D14, D27; missing presentation D16 |
+| DoD3 Boundary timestamp, duplicate/reordered request, cooldown, distance, disconnect, and missing-presentation cases | Boundaries D10, D19, D21; duplicate and reordered D5, D12, D24; cooldown D9; distance D2, D6; disconnect D14; missing presentation D16 |
 | DoD4 Life-state cancellation through an authoritative test seam; #21 owns integrated death and respawn | D13; [Disconnect, life state, and missing presentation](#disconnect-life-state-and-missing-presentation) |
 | Owner decisions 1, 2, 5: the block and its exposure to #60 | D18 to D21, D23; [The Block](#the-block) |
 
@@ -1035,7 +1057,7 @@ files untouched.
 | **P2** Dodge movement | GameCore only: first the loopback harness (see [Test Plan](#test-plan)); then the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1; Q2, Q3, Q14, Q15, and Q20 approved 2026-10-07 |
 | **P3** Dodge authority | Dodge tags, `UAethelnDodgeAbility`, the selected movement-carried entry and outcome RPC, the ordinal, the PlayerState authority, windows and boundaries, `IsAvoidingAt`, operation/callback-safe commit and lifecycle cancellation, telemetry, the #19 fixture changes; D7 to D16 (dodge rows). | P2 (PR #282); #19 P4 cost and cooldown (PR #270); #60 P3 operation identity and callback safety (PR #291); Q4 and Q16 (owner-approved 2026-10-10); T1 selected. #60's `RegisterStep` takes only chain steps 1 to 3, so P3 itself adds the non-chain boundary registration (`RegisterNonChainBoundaries`) to the #60 timeline subsystem. |
 | **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8, Q10, Q12, and Q17 to Q19 (owner-approved 2026-10-10; Q12's airborne facing bound exists in the movement component since [#306](https://github.com/ShayShimoni/aetheln-online/issues/306), so the gate is met), and the lead's sign-off on T2 and T3 as #60 owner (2026-10-11) |
-| **P5** Bindings and two-client evidence | The receiver and input-sink release, the GameUI dodge key and right-mouse hold, Cursor-entry release; D26, D27. | P4, #60 P6 (input sink), #19 P5 (input-enabled pawn), Q1 |
+| **P5** Bindings and two-client evidence | The receiver and input-sink release, the GameUI dodge key and right-mouse hold, Cursor-entry release; D26, D27. Landed: the dodge key calls the receiver's existing `ReceiveDodgePressed` (the movement-carried route, T1), the block uses the sink's press and the new release, and the owner's commitment window feeds the local gate. The values stay `TBD` (#107, #45); no key beyond Left Control and the right mouse button is chosen (#82) | P4, #60 P6 (input sink), #19 P5 (input-enabled pawn), Q1 |
 
 Guard and Endurance recovery are not #18 phases. By Q9 (owner-approved
 2026-10-10) a separate ticket owns them before P5's feel evidence:

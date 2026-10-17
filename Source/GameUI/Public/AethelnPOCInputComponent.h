@@ -44,6 +44,9 @@ private:
 /** Sends one ability press through the controller's PlayerState as an IAethelnCombatInputSink. False if it is not one. */
 GAMEUI_API bool SubmitAbilityPress(APlayerController* Controller, FGameplayTag AbilityId);
 
+/** Sends one ability release (the right mouse button's block) the same way. False if it is not a sink. */
+GAMEUI_API bool SubmitAbilityRelease(APlayerController* Controller, FGameplayTag AbilityId);
+
 /** Sends the basic-chain press (the left mouse button's attack). */
 GAMEUI_API bool SubmitPrimaryAttack(APlayerController* Controller);
 
@@ -81,6 +84,13 @@ public:
 
 	UPROPERTY(Config)
 	FKey DefenseStanceKey;
+
+	/**
+	 * The one dodge key (#18 P5, owner decision 2026-10-10, Q1): Left Control by default, remappable here. The block is the right
+	 * mouse button. Neither has a controller layout yet (#82).
+	 */
+	UPROPERTY(Config)
+	FKey DodgeKey;
 
 protected:
 	virtual void OnRegister() override;
@@ -120,6 +130,13 @@ private:
 	void HandleViewportRecaptureReleased(const FInputActionValue& Value);
 	/** One of the four actives: a Reticle-mode press only, sent to the server as an ability press; Cursor mode sends nothing. */
 	void HandleActivePress(const FInputActionValue& Value, FGameplayTag AbilityId);
+	/** The dodge key: a Reticle-mode press asks the pawn for a movement-carried dodge, whose local gate decides; Cursor mode sends nothing. */
+	void HandleDodgePressed(const FInputActionValue& Value);
+	/** The right mouse button: a Reticle-mode press raises the block, and the release lowers it if it is held. */
+	void HandleBlockPressed(const FInputActionValue& Value);
+	void HandleBlockReleased(const FInputActionValue& Value);
+	/** Lowers a held block once, on Cursor entry and focus loss. On teardown it only clears the held state: the controller is usually gone by then, and the server's avatar-loss path ends the block. */
+	void ReleaseHeldBlock();
 	void HandleJumpStarted(const FInputActionValue& Value);
 	void HandleJumpStopped(const FInputActionValue& Value);
 	void HandleJumpCanceled(const FInputActionValue& Value);
@@ -157,6 +174,12 @@ private:
 	TArray<TObjectPtr<UInputAction>> ActiveActions;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> DodgeAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> BlockAction;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> JumpAction;
 
 	UPROPERTY(Transient)
@@ -185,4 +208,6 @@ private:
 	bool bMoveBackwardHeld = false;
 	bool bMoveLeftHeld = false;
 	bool bMoveRightHeld = false;
+	/** A block press was sent and its release was not. */
+	bool bBlockHeld = false;
 };
