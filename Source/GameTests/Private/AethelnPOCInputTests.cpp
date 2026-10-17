@@ -350,6 +350,9 @@ bool FAethelnPOCCursorModeGatesPressesTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("%s press starts the movement tick"), Move), Input.IsComponentTickEnabled());
 		TestEqual(*FString::Printf(TEXT("%s release ran"), Move), F.Release(Move), 1);
 		TestFalse(*FString::Printf(TEXT("%s release stops the movement tick"), Move), Input.IsComponentTickEnabled());
+		F.Press(Move);
+		TestEqual(*FString::Printf(TEXT("%s cancel ran"), Move), Fire(Input, Move, ETriggerEvent::Canceled), 1);
+		TestFalse(*FString::Printf(TEXT("%s cancel stops the movement tick"), Move), Input.IsComponentTickEnabled());
 	}
 	for (const TCHAR* Action : ActiveActions) { TestEqual(*FString::Printf(TEXT("%s press ran"), Action), F.Press(Action), 1); }
 	TestEqual(TEXT("Each Reticle-mode active press reached the seam"), F.Outcomes.Num(), 4);
@@ -397,6 +400,8 @@ bool FAethelnPOCCursorModeGatesPressesTest::RunTest(const FString& Parameters)
 		const int32 Before = Spy->MoveInputs.Num();
 		F.Release(Move);
 		TestTrue(*FString::Printf(TEXT("%s release sends zero move input in Cursor mode"), Move), Spy->MoveInputs.Num() == Before + 1 && Spy->MoveInputs.Last().IsNearlyZero());
+		Fire(Input, Move, ETriggerEvent::Canceled);
+		TestTrue(*FString::Printf(TEXT("%s cancel sends zero move input in Cursor mode"), Move), Spy->MoveInputs.Num() == Before + 2 && Spy->MoveInputs.Last().IsNearlyZero());
 	}
 	return true;
 }
@@ -452,6 +457,15 @@ bool FAethelnPOCPressReachesSeamTest::RunTest(const FString& Parameters)
 	F.Release(TEXT("IA_POC_ViewportRecapture"));
 	TestEqual(TEXT("A fresh press after the release attacks"), F.Press(TEXT("IA_POC_ViewportRecapture")), 1);
 	TestEqual(TEXT("The server answered the fresh press"), F.Outcomes.Num(), 2);
+
+	// A cancel releases the primary button as a release does: a consumed click does not attack, and the press after the cancel does.
+	F.Press(TEXT("IA_POC_ToggleControlMode"));
+	F.Press(TEXT("IA_POC_ViewportRecapture"));
+	F.Press(TEXT("IA_POC_ViewportRecapture"));
+	TestEqual(TEXT("A consumed click sends nothing"), F.Outcomes.Num(), 2);
+	TestEqual(TEXT("The primary button's Canceled binding ran"), Fire(*F.Input, TEXT("IA_POC_ViewportRecapture"), ETriggerEvent::Canceled), 1);
+	F.Press(TEXT("IA_POC_ViewportRecapture"));
+	TestEqual(TEXT("A fresh press after the cancel attacks"), F.Outcomes.Num(), 3);
 	return true;
 }
 
