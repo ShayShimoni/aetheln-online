@@ -3,6 +3,7 @@
 #include "Abilities/GameplayAbility.h"
 #include "AbilitySystemGlobals.h"
 #include "AethelnAbilitySystemComponent.h"
+#include "AethelnBasicChainAbility.h"
 #include "AethelnCombatAICharacter.h"
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnCombatGameMode.h"
@@ -128,6 +129,33 @@ bool FAethelnPlayerStateOwnsAbilitySystemTest::RunTest(const FString& Parameters
 		TestTrue(*FString::Printf(TEXT("%s ProvisionalInitialAttributes parses"), *Section),
 			Property != nullptr && Property->ImportText_Direct(*IniAttributes, &ParsedAttributes, nullptr, PPF_None) != nullptr);
 	}
+	return true;
+}
+
+// #19 feel-test prerequisites: the production config grants the basic chain and sets the owner's provisional player attributes
+// (issue #107 comment 6232938657). Reads the class default after config; no world is needed. A change to the ini that drops the
+// grant, or lets the chain's cost exceed MaxEndurance, flips a line here.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnProductionPlayerConfigTest,
+	"Aetheln.GameCombat.Lifecycle.ProductionPlayerConfig",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnProductionPlayerConfigTest::RunTest(const FString& Parameters)
+{
+	const AAethelnPlayerState* Defaults = GetDefault<AAethelnPlayerState>();
+	const FAethelnCombatAttributeInitValues& Initial = Defaults->ProvisionalInitialAttributes;
+	TestEqual(TEXT("MaxHealth is the provisional 40"), Initial.MaxHealth, 40.0f);
+	TestEqual(TEXT("MaxEndurance is the provisional 30"), Initial.MaxEndurance, 30.0f);
+	TestEqual(TEXT("MaxGuard is the provisional 20"), Initial.MaxGuard, 20.0f);
+	TestEqual(TEXT("Health starts at its maximum"), Initial.Health, Initial.MaxHealth);
+	TestEqual(TEXT("Endurance starts at its maximum"), Initial.Endurance, Initial.MaxEndurance);
+	TestEqual(TEXT("Guard starts at its maximum"), Initial.Guard, Initial.MaxGuard);
+
+	TestTrue(TEXT("The basic chain is granted in production"), Defaults->GrantedAbilities.Contains(UAethelnBasicChainAbility::StaticClass()));
+	// The grant check the PlayerState runs on possession (its refusals are the attack_definition_missing and attack_definition_invalid identifiers).
+	TestTrue(TEXT("The basic chain passes grant validation"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnBasicChainAbility::StaticClass(), 1)));
+	TestTrue(TEXT("The chain's Endurance cost is within the configured MaxEndurance"),
+		GetDefault<UAethelnBasicChainAbility>()->ProvisionalEnduranceCost <= Initial.MaxEndurance);
 	return true;
 }
 

@@ -219,6 +219,14 @@ namespace AethelnTwoClientAttackTests
 		AbilitySystem->ProvisionalAimMaxRateDegreesPerSecond = 1000.0f;
 		AbilitySystem->ProvisionalActivationBucketCapacity = 1000.0f;
 		AbilitySystem->ProvisionalActivationBucketRefillPerSecond = 0.0f;
+		// #19: production now grants the basic chain at possession, and FindSpecForAbilityId resolves the first spec of an id, so the fixture's
+		// chain (the same id, with the scaled windows below) replaces it.
+		TArray<FGameplayAbilitySpecHandle> ProductionChains;
+		for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+		{
+			if (Spec.Ability != nullptr && Spec.Ability->GetClass() == UAethelnBasicChainAbility::StaticClass()) { ProductionChains.Add(Spec.Handle); }
+		}
+		for (const FGameplayAbilitySpecHandle& Handle : ProductionChains) { AbilitySystem->ClearAbility(Handle); }
 		AbilitySystem->GiveAbility(FGameplayAbilitySpec(UAethelnChainTestAbility::StaticClass(), 1));
 		if (R.WindowScale != 1.0)
 		{

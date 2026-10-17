@@ -150,7 +150,7 @@ namespace AethelnTwoClientHudTests
 			}, Timeout)
 			.ThenServer(TEXT("Give both players fixture attributes"), [R, Init](FState& Server)
 			{
-				// The ini's provisional initial attributes are zero (TBD until #107): a respawn would refuse with no MaxHealth.
+				// The ini sets the owner's provisional attributes (#19), equal to the fixture values; applying them keeps this test independent of a later re-tune.
 				for (int32 Index : { ClientA, ClientB })
 				{
 					AAethelnPlayerState& PlayerState = *ServerPlayerState(Server, Index);
