@@ -1,6 +1,7 @@
 name: Delivery policy
 
-# Issue #214: hosted pull-request policy that needs no project access. PR data
+# Issue #214: pull-request policy that needs no project access (aetheln-checks
+# runners since issue #376). PR data
 # reaches the script only through env, never interpolated into run.
 on:
   pull_request:
@@ -15,7 +16,7 @@ permissions:
 jobs:
   pull-request-policy:
     name: pull-request-policy
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64, aetheln-checks]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

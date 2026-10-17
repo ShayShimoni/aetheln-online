@@ -142,14 +142,14 @@ is in this repository: a fork names its own branches and gets no exception.
 A `hotfix/*` PR links its own ticket and is matched like any other PR, so
 that ticket is in `Code Review` while the PR is open. Any other PR with
 neither a title `#<issue>` nor a closing reference links nothing, so the
-board check cannot see it; the hosted `pull-request-policy` title check
+board check cannot see it; the `pull-request-policy` title check
 reports it instead.
 
 Run it at session start, after every merge, and before every release cut. A
 violation is fixed, or ticketed when it cannot be fixed at once, before other
 work continues.
 
-The hosted `pull-request-policy` check (`.github/workflows/delivery-policy.yml`)
+The `pull-request-policy` check (`.github/workflows/delivery-policy.yml`)
 needs no project access. It fails a PR whose base is `main` and whose head is
 not `release/*` or `hotfix/*`, whose head branch does not start with
 `feature/`, `fix/`, `docs/`, `chore/`, `release/`, `hotfix/`, or `codex/`
@@ -166,7 +166,7 @@ a fork PR gets the full branch and title rules and is never accepted into
 
 Run the applicable, attainable [Issue #16 CI baseline](continuous-integration.md)
 on the exact candidate head. Distinguish required from advisory checks and
-hosted portable results from selected trusted engine compile, packaged smoke,
+portable results from selected trusted engine compile, packaged smoke,
 or deferred tests; a skipped or zero-step failure is not a pass. For a merge
 into `develop`, record independent-agent technical review, any separately
 required human review, applicable checks, and explicit owner authorization.

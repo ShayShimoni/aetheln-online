@@ -109,17 +109,17 @@ finally {
 	$env:AETHELN_PR_HEAD_REPOSITORY = $SavedEnvironment[3]; $env:AETHELN_PR_BASE_REPOSITORY = $SavedEnvironment[4]
 }
 
-# Workflow contract: hosted, read-only, bounded, re-run on title edits, and no
-# untrusted expression inside a run block.
+# Workflow contract: on the aetheln-checks runners (issue #376), read-only,
+# bounded, re-run on title edits, and no untrusted expression inside a run block.
 $Workflow = Get-Content -LiteralPath $WorkflowPath -Raw
 Assert-True ($Workflow -match "(?m)^on:\r?\n  pull_request:\r?\n    types: \[opened, edited, synchronize, reopened\]\r?\n    branches:\r?\n      - develop\r?\n      - main\r?\n") 'The workflow must run on pull_request to develop and main, including title edits.'
 Assert-True ($Workflow -match "(?m)^permissions:\r?\n  contents: read\r?$" -and $Workflow -notmatch '(?m):\s*write\s*$') 'The workflow must be read-only.'
-Assert-True ($Workflow -notmatch 'pull_request_target|workflow_dispatch|self-hosted|aetheln-engine') 'The workflow must be hosted and pull_request only.'
-Assert-True ($Workflow -match '(?m)^    name: pull-request-policy\r?$' -and $Workflow -match '(?m)^    runs-on: windows-latest\r?$' -and $Workflow -match '(?m)^    timeout-minutes: 5\r?$') 'The policy job must be named, hosted, and bounded.'
+Assert-True ($Workflow -notmatch 'pull_request_target|workflow_dispatch|aetheln-engine|concurrency:') 'The workflow must be pull_request only and stay off the engine runner and its queue.'
+Assert-True ($Workflow -match '(?m)^    name: pull-request-policy\r?$' -and $Workflow -match '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-checks\]\r?$' -and $Workflow -match '(?m)^    timeout-minutes: 5\r?$') 'The policy job must be named, run on the aetheln-checks runners, and be bounded.'
 Assert-True ($Workflow -match '(?m)^      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\r?$' -and $Workflow -match '(?m)^          persist-credentials: false\r?$') 'Checkout must use the reviewed pinned action without persisted credentials.'
 Assert-True ($Workflow -match '(?m)^          AETHELN_PR_TITLE: \$\{\{ github\.event\.pull_request\.title \}\}\r?$' -and $Workflow -match '(?m)^          AETHELN_PR_BASE_REF: \$\{\{ github\.base_ref \}\}\r?$' -and $Workflow -match '(?m)^          AETHELN_PR_HEAD_REF: \$\{\{ github\.head_ref \}\}\r?$' -and $Workflow -match '(?m)^          AETHELN_PR_HEAD_REPOSITORY: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name \}\}\r?$' -and $Workflow -match '(?m)^          AETHELN_PR_BASE_REPOSITORY: \$\{\{ github\.repository \}\}\r?$') 'PR inputs must be bound through env.'
 $RunLines = @([regex]::Matches($Workflow, '(?m)^\s+run: (.+)$') | ForEach-Object { $_.Groups[1].Value })
 Assert-True ($RunLines.Count -eq 1 -and $RunLines[0] -notmatch '\$\{\{' -and $RunLines[0] -match 'scripts/ci/Test-PullRequestPolicy\.ps1') 'The single run step must call the checker with no expression interpolation.'
 
-Write-Output 'PASS: pull request policy enforces main heads, branch naming, and issue-referencing titles, with no fork exemptions, through a hosted read-only workflow'
+Write-Output 'PASS: pull request policy enforces main heads, branch naming, and issue-referencing titles, with no fork exemptions, through a read-only workflow on the check runners'
 exit 0

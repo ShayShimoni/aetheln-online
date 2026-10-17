@@ -473,6 +473,43 @@ Every accepted decision records:
   wrong, a second matching runner is registered, GitHub ships native job
   priority or changes concurrency queue semantics, or the milestone moves off
   the single-runner topology.
+- **Amendment (2026-10-17, every job on self-hosted runners, issue #376):** by
+  owner decision (issue
+  [#376](https://github.com/ShayShimoni/aetheln-online/issues/376) body and
+  [comment 6235010034](https://github.com/ShayShimoni/aetheln-online/issues/376#issuecomment-6235010034),
+  2026-10-17) the repository becomes private, and every CI job runs on the
+  owner's self-hosted runners; none uses a GitHub-hosted runner. Two check
+  runners labeled `[self-hosted, Windows, X64, aetheln-checks]` (runners 22
+  and 23) run the portable, policy, classifier, selector, visual, receipt,
+  acceptance, and packaging guard jobs; runner 21 keeps the exclusive
+  `aetheln-engine` label and runs only the engine jobs. `quality-gates` joins
+  the `aetheln-engine-runner` group with `queue: max` and
+  `cancel-in-progress: false`, because the suite running beside a compile on
+  the same PC is a recorded cause of `resource_pressure`; inside one run this
+  changes nothing, since `trusted-candidate-compile` already needs
+  `quality-gates`, but across runs the suite can wait behind another pull
+  request's engine jobs. The other check jobs take seconds to a few minutes
+  and join no group. PSScriptAnalyzer 1.25.0 is a host prerequisite of the
+  check runners instead of part of a hosted image. The independence of the
+  shadow selector, receipt publishers, and acceptance aggregate from the
+  engine host, a #167 design rule for a public repository open to outside
+  contributors, is given up knowingly: on a private single-owner repository
+  only collaborators can open pull requests, and the owner accepts that the
+  checker and the checked run on the same machine. Cost reason, measured from
+  2026-10-03 to 2026-10-17 over every completed job: 9,521 hosted
+  `windows-latest` minutes in 2,093 jobs (about 20,400 a month), of which
+  `quality-gates` used 8,722. On a private repository the Free plan includes
+  2,000 minutes a month and Windows minutes count double, so the small jobs
+  alone (about 1,700 raw minutes a month, counted as 3,400) exceed the quota;
+  with every job self-hosted the Actions cost is $0. Rejected alternative:
+  porting the checks to Linux hosted runners, whose minutes count once, because
+  the checks are Windows PowerShell 5.1 and the port is not worth the work.
+  The `change-impact` block pin is now 7,712 bytes, SHA-256
+  `3e03db1e535b620db1aac3bcf8b9f95105871481cc22fb1c70d301d1be3e347f` (its
+  `runs-on` line and comment changed). `Test-RunnerSchedulingPolicy.Tests.ps1`
+  now allows only the exact check and engine label sets, forbids
+  `windows-latest`, and keeps its no-event-interpolation rule on the
+  engine-runner jobs.
 
 ### TA-015 - Bounded Routine Compilation with Isolated Output Retention
 
