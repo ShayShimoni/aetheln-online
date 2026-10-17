@@ -406,7 +406,8 @@ namespace AethelnTwoClientDefenseTests
 
 // D27. Red-first: with SubmitAbilityRelease sending nothing, the second stage never completes ("Block, release, block, and dodge while
 // blocking" times out at stage 2, the owner never receiving its second outcome); with the dodge sent as a seam press instead of the
-// movement flag, the server answers MalformedRequest and "The dodge is accepted" is the line that flips.
+// movement flag, the owner gets no movement outcome, so the Drive step stalls at stage 4 and times out. This test calls the pawn's
+// receiver directly, so the key routing itself is D26's ("The dodge press is not a seam request").
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnDodgeAndBlockTwoClientsTest,
 	"Aetheln.GameCombat.Net.DodgeAndBlockTwoClients",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

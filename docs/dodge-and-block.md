@@ -186,7 +186,7 @@ Existing code at `f173388`:
 | `UAethelnAbilitySystemComponent` (extend) | GameCombat | The movement-carried seam entry and its owner outcome RPC; the avoidance window (`IsAvoidingAt`); the dodge's `State.Dead` binding; `CancelBlock`, which an accepted dodge calls (Q10). |
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnMovementActionAuthority` by forwarding to its ASC. |
 | `IAethelnCombatInputSink` (#60 P6, extend) | GameCore | P5 adds `RequestAbilityRelease(FGameplayTag AbilityId)` beside #60's press. `AAethelnPlayerState` implements it as the same activation request with the Release phase, so no new RPC exists. |
-| `UAethelnPOCInputComponent` (extend) | GameUI | P5: dodge press (`IA_POC_Dodge`, key per Q1, calls the pawn receiver's `ReceiveDodgePressed`) and right-mouse hold (`IA_POC_Block`, `Ability.Block` through the input sink), Reticle mode only; Cursor entry, focus loss and teardown release a held block once. |
+| `UAethelnPOCInputComponent` (extend) | GameUI | P5: dodge press (`IA_POC_Dodge`, key per Q1, calls the pawn receiver's `ReceiveDodgePressed`) and right-mouse hold (`IA_POC_Block`, `Ability.Block` through the input sink), Reticle mode only; Cursor entry and focus loss send the release of a held block once; on teardown the client only clears its held state, and the server's avatar-loss path ends the block. |
 
 GameCore stays free of GAS: the movement component reaches the authority only
 through the interface, found through `CharacterOwner->GetPlayerState()`. A
@@ -1024,7 +1024,7 @@ the right mouse button as bound. Every value is a fixture value, not tuning.
    distance with no visible correction, and the other client sees the same path.
    Press it again inside the cooldown, and during an attack's commitment window:
    no dodge starts, so no correction.
-3. Repeat step 2 under each C2 kind (lag, loss, duplication, reordering) and
+3. Repeat step 2 under each C2 kind of the input spike (one run per #44 catalog kind) and
    record, per kind, how many dodges were refused and corrected (the refused
    dodge's correction rate, Residual Risks item 6).
 4. Swing an enemy step at a blocking player and at a dodging player: both clients
@@ -1042,7 +1042,7 @@ the right mouse button as bound. Every value is a fixture value, not tuning.
 | AC5 Invalid repeated dodge requests are rejected | D5, D8, D9, D12; [Rejections](#rejections) |
 | DoD1 Normal, high-latency, and packet-loss cases are tested | Automated (owner-approved Q20): D5, D12, D24. D27 is additional PIE evidence. |
 | DoD2 The server-owned authored window is authoritative; animation only visualizes it | D10, D16; [Prediction Policy](#prediction-policy) |
-| DoD3 Boundary timestamp, duplicate/reordered request, cooldown, distance, disconnect, and missing-presentation cases | Boundaries D10, D19, D21; duplicate and reordered D5, D12, D24; cooldown D9; distance D2, D6; disconnect D14, D27; missing presentation D16 |
+| DoD3 Boundary timestamp, duplicate/reordered request, cooldown, distance, disconnect, and missing-presentation cases | Boundaries D10, D19, D21; duplicate and reordered D5, D12, D24; cooldown D9; distance D2, D6; disconnect D14; missing presentation D16 |
 | DoD4 Life-state cancellation through an authoritative test seam; #21 owns integrated death and respawn | D13; [Disconnect, life state, and missing presentation](#disconnect-life-state-and-missing-presentation) |
 | Owner decisions 1, 2, 5: the block and its exposure to #60 | D18 to D21, D23; [The Block](#the-block) |
 

@@ -135,7 +135,7 @@ private:
 	/** The right mouse button: a Reticle-mode press raises the block, and the release lowers it if it is held. */
 	void HandleBlockPressed(const FInputActionValue& Value);
 	void HandleBlockReleased(const FInputActionValue& Value);
-	/** Lowers a held block once: Cursor entry, focus loss and teardown. */
+	/** Lowers a held block once, on Cursor entry and focus loss. On teardown it only clears the held state: the controller is usually gone by then, and the server's avatar-loss path ends the block. */
 	void ReleaseHeldBlock();
 	void HandleJumpStarted(const FInputActionValue& Value);
 	void HandleJumpStopped(const FInputActionValue& Value);

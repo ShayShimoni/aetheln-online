@@ -49,7 +49,7 @@ TSharedRef<SWidget> UAethelnPOCOverlayWidget::RebuildWidget()
 						TEXT("Left Alt  Toggle Cursor Mode\n")
 						TEXT("Mouse Wheel  Camera Zoom / Shoulder / First Person\n")
 						TEXT("Space  Jump   Shift  Sprint Forward\n")
-						TEXT("LMB Primary / RMB Defense  Reserved (No Combat Yet)")))
+						TEXT("LMB Primary   RMB Block (hold)   Left Ctrl  Dodge")))
 					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
 					.ColorAndOpacity(FLinearColor(0.95f, 0.97f, 1.0f, 1.0f))
 				]
